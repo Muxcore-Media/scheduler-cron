@@ -1,0 +1,11 @@
+{
+  "name": "Cron Scheduler",
+  "description": "Cron-based task scheduler for MuxCore. Executes scheduled tasks and emits events on the bus.",
+  "version": "1.0.0",
+  "icon": "",
+  "author": "MuxCore",
+  "kind": "scheduler",
+  "capabilities": ["scheduler.cron", "scheduler.schedule"],
+  "dependencies": [],
+  "homepage": "https://github.com/Muxcore-Media/scheduler-cron"
+}
