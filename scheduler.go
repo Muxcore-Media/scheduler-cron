@@ -42,7 +42,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 		ID:           "scheduler-cron",
 		Name:         "Cron Scheduler",
 		Version:      "1.0.0",
-		Kind:         contracts.ModuleKindScheduler,
+		Kinds:        []contracts.ModuleKind{contracts.ModuleKindScheduler},
 		Description:  "Cron-based task scheduler",
 		Author:       "MuxCore",
 		Capabilities: []string{"scheduler.cron", "scheduler.schedule"},
