@@ -11,6 +11,12 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
+func init() {
+	contracts.Register(func(deps contracts.ModuleDeps) contracts.Module {
+		return NewModule(deps.EventBus)
+	})
+}
+
 type taskEntry struct {
 	Task   contracts.Task
 	CronID cron.EntryID
