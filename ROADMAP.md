@@ -4,33 +4,26 @@
 
 ## Phases
 
-### Phase 1: Core Scheduling (minimum viable)
-- [x] Project scaffold (this repo)
-- [ ] `go mod init` with core dependency (+ `robfig/cron`)
-- [ ] Cron expression parser (wrapping robfig/cron)
-- [ ] In-memory schedule store
-- [ ] `Scheduler.Schedule` — register a periodic task
-- [ ] `Scheduler.Cancel` — remove a scheduled task
-- [ ] `Scheduler.Status` — query next/last execution
-- [ ] `Scheduler.List` — query all scheduled tasks
-- [ ] Task execution loop (tick every 30s, fire due tasks)
-- [ ] Sidecar entry point (`cmd/module/main.go`)
-- [ ] Unit tests: cron parsing, schedule firing, edge cases (40+ tests)
+### Phase 1: Core Scheduling (minimum viable) ✅
+- [x] Project scaffold
+- [x] `go mod init` with core + robfig/cron
+- [x] In-memory cron schedule store (`internal/cronstore`)
+- [x] HTTP API: schedule, cancel, status, list (`internal/server`)
+- [x] Sidecar entry point (`cmd/module/main.go`)
+- [x] Unit tests: schedule store (10+ tests)
+- [x] Unit tests: HTTP API (6 test scenarios)
+- [x] Timezone support
 
 ### Phase 2: Events & Observability
 - [ ] Publish events on task lifecycle (`scheduler.task.*`)
-- [ ] Task timeout enforcement (from `SchedulerTask.Timeout`)
-- [ ] Timezone support (`--timezone` flag)
-- [ ] Prometheus metrics (scheduled task count, executions)
+- [ ] Task timeout enforcement
+- [ ] Prometheus metrics (scheduled count, executions)
 - [ ] Health endpoint
-- [ ] Audit logging of schedule changes
-- [ ] GitHub CI (build + lint + test)
 
 ### Phase 3: Persistence & Advanced
 - [ ] Optional persistent schedule store via DatabaseProvider
-- [ ] Missed schedule catch-up on restart (`--missed-startup`)
-- [ ] One-shot tasks (non-recurring scheduled execution)
-- [ ] Task execution history (last N results)
+- [ ] Missed schedule catch-up on restart
+- [ ] One-shot tasks (non-recurring)
 - [ ] Integration test with running muxcored
 
 ## Design Decisions
