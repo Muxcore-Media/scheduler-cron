@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/Muxcore-Media/scheduler-cron/internal/cronstore"
@@ -29,11 +30,19 @@ func New(store *cronstore.Store) *Server {
 	s.mux.HandleFunc("/status/", s.handleStatus)
 	s.mux.HandleFunc("/list", s.handleList)
 	s.mux.HandleFunc("/health", s.handleHealth)
+	s.mux.HandleFunc("/metrics", s.handleMetrics)
 	return s
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	fmt.Fprintf(w, "# HELP scheduler_tasks_total Total scheduled tasks\n")
+	fmt.Fprintf(w, "# TYPE scheduler_tasks_total gauge\n")
+	fmt.Fprintf(w, "scheduler_tasks_total %d\n", s.store.Len())
 }
 
 // Handler returns the HTTP handler for mounting on a custom mux.
