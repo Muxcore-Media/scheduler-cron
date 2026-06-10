@@ -19,7 +19,7 @@ type Server struct {
 }
 
 // New creates an HTTP server backed by the given cron store.
-func New(store *cronstore.Store, taskHandler func(taskID string)) *Server {
+func New(store *cronstore.Store) *Server {
 	s := &Server{
 		store: store,
 		mux:   http.NewServeMux(),
@@ -28,7 +28,6 @@ func New(store *cronstore.Store, taskHandler func(taskID string)) *Server {
 	s.mux.HandleFunc("/cancel/", s.handleCancel)
 	s.mux.HandleFunc("/status/", s.handleStatus)
 	s.mux.HandleFunc("/list", s.handleList)
-	_ = taskHandler
 	return s
 }
 

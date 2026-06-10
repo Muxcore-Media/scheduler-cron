@@ -17,7 +17,7 @@ func newTestServer(t *testing.T) *Server {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(store.Stop)
-	return New(store, func(taskID string) {})
+	return New(store)
 }
 
 func TestSchedule(t *testing.T) {

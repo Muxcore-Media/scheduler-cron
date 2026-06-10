@@ -38,9 +38,7 @@ func main() {
 	defer store.Stop()
 
 	// Start HTTP API server.
-	httpSrv := server.New(store, func(taskID string) {
-		slog.Info("task fired — execution not yet implemented", "task_id", taskID)
-	})
+	httpSrv := server.New(store)
 
 	lis, err := net.Listen("tcp", *httpAddr)
 	if err != nil {
