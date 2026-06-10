@@ -28,7 +28,12 @@ func New(store *cronstore.Store) *Server {
 	s.mux.HandleFunc("/cancel/", s.handleCancel)
 	s.mux.HandleFunc("/status/", s.handleStatus)
 	s.mux.HandleFunc("/list", s.handleList)
+	s.mux.HandleFunc("/health", s.handleHealth)
 	return s
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // Handler returns the HTTP handler for mounting on a custom mux.
