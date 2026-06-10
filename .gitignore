@@ -1,0 +1,12 @@
+# Build artifacts
+/scheduler-cron
+/cmd/module/module
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
