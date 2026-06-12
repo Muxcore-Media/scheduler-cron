@@ -1,6 +1,5 @@
-module: scheduler-cron/.dockerignore
 *
-!cmd/module
-!internal
+!cmd/
+!internal/
 !go.mod
 !go.sum
