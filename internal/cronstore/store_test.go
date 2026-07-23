@@ -182,3 +182,29 @@ func TestFire(t *testing.T) {
 		t.Fatal("timed out waiting for task to fire")
 	}
 }
+
+func TestSetStatus(t *testing.T) {
+	s, err := New("UTC")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Stop()
+
+	id, err := s.Add("status-test", "0 0 * * *", nil, 0, nil, func(id string) {})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := s.SetStatus(id, "running"); err != nil {
+		t.Fatalf("SetStatus: %v", err)
+	}
+	task, err := s.Get(id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if task.Status != "running" {
+		t.Errorf("Status = %q, want running", task.Status)
+	}
+	if err := s.SetStatus("missing", "failed"); err == nil {
+		t.Fatal("expected error for missing task")
+	}
+}
