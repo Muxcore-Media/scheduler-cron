@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
+	"github.com/Muxcore-Media/core/sdk/go/client"
 	"github.com/Muxcore-Media/scheduler-cron/internal/cronstore"
 	"github.com/Muxcore-Media/scheduler-cron/internal/server"
 )
@@ -18,6 +19,7 @@ type Module struct {
 	srv      *server.Server
 	httpSrv  *http.Server
 	lis      net.Listener
+	mc       *client.Client
 	id       string
 	httpAddr string
 }
@@ -51,7 +53,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 		Roles:        []string{"infrastructure"},
 		Description:  "Cron-based task scheduler for periodic and recurring jobs",
 		Author:       "MuxCore",
-		Capabilities: []string{contracts.CapabilityScheduler},
+		Capabilities: []string{contracts.CapabilityScheduler, "scheduler.cron"},
 		HTTPAddr:     m.httpAddr,
 	}
 }
@@ -73,6 +75,7 @@ func (m *Module) Init(ctx context.Context) error {
 
 func (m *Module) Start(ctx context.Context) error {
 	m.httpSrv = &http.Server{Handler: m.srv.Handler()}
+	go m.dialCore(ctx)
 	go func() {
 		slog.Info("scheduler-cron HTTP started", "addr", m.httpAddr)
 		if err := m.httpSrv.Serve(m.lis); err != nil && err != http.ErrServerClosed {
@@ -82,9 +85,35 @@ func (m *Module) Start(ctx context.Context) error {
 	return nil
 }
 
+func (m *Module) dialCore(ctx context.Context) {
+	meshAddr := os.Getenv("MUXCORE_GRPC_ADDR")
+	if meshAddr == "" {
+		meshAddr = "localhost:9090"
+	}
+	insecureMode := os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") == "true" || os.Getenv("MUXCORE_GRPC_INSECURE") == "true"
+	var opts []client.Option
+	if insecureMode {
+		opts = append(opts, client.WithInsecure())
+	}
+	c, err := client.Dial(meshAddr, opts...)
+	if err != nil {
+		slog.Warn("scheduler-cron: dial core (events unavailable)", "error", err)
+		return
+	}
+	m.mc = c
+	m.srv.SetEventPublisher(c.Events, m.id)
+	slog.Info("scheduler-cron: connected to core mesh", "addr", meshAddr)
+}
+
 func (m *Module) Stop(ctx context.Context) error {
 	if m.httpSrv != nil {
 		m.httpSrv.Shutdown(ctx)
+	}
+	if m.mc != nil {
+		m.mc.Close()
+	}
+	if m.store != nil {
+		m.store.Stop()
 	}
 	slog.Info("scheduler-cron stopped")
 	return nil

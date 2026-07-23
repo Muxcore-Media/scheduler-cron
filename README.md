@@ -2,27 +2,22 @@
 
 Cron-based task scheduler for periodic and recurring jobs in MuxCore.
 
-Without this module, there is no way to run tasks on a schedule. All automation
-must be triggered manually or by external tooling.
+Core has no built-in Scheduler — this module is the reference implementation
+(on the default spool). Without it, there is no way to run tasks on a schedule;
+all automation must be triggered manually or by external tooling.
 
 ## How It Works
 
 ```
-Module registers cron task:
-  Schedule(ctx, task{SchedulerTask{
-    Name:     "daily-library-scan",
-    CronExpr: "0 3 * * *",
-    Payload:  json(`{"type": "library.scan"}`),
-  }})
+Client registers a cron task via HTTP:
+  POST /schedule  { name, cron_expr, payload?, timeout?, meta? }
         │
         ▼
-scheduler-cron parses expression and stores the schedule
+scheduler-cron validates the expression and stores the schedule in-memory
         │
         ▼
-At the scheduled time, the module publishes an event:
-  scheduler.task.started → executor module picks up the task
-  scheduler.task.completed → published on success
-  scheduler.task.failed → published on error
+At the scheduled time, the cron store fires the task handler
+(currently logs only; see ROADMAP for event publishing)
 ```
 
 ### Supported Cron Expressions
@@ -45,18 +40,32 @@ Also supports:
 
 ## Configuration
 
-### CLI Flags
+### Environment
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--timezone` | `UTC` | Timezone for cron evaluation |
-| `--missed-startup` | `false` | Catch up on missed schedules after restart |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SCHEDULER_HTTP_ADDR` | `:9200` | HTTP listen address for the schedule API |
+| `MUXCORE_GRPC_ADDR` | (SDK default) | Core gRPC address for sidecar registration |
+| `MUXCORE_MODULE_ID` | `scheduler-cron` | Module identity when registering with core |
+| `MUXCORE_INSECURE_DISABLE_TLS` | unset | Dev-only: disable TLS to core |
+
+Timezone for cron evaluation is UTC (`cronstore.New("")`). There is no CLI flag for timezone or missed-startup catch-up.
+
+## HTTP API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/schedule` | Register a task (`name`, `cron_expr` required) |
+| `DELETE` | `/cancel/{id}` | Cancel a task |
+| `GET` | `/status/{id}` | Get task status |
+| `GET` | `/list` | List tasks (`?name=` substring filter) |
+| `GET` | `/health` | Health check |
+| `GET` | `/metrics` | Prometheus gauge `scheduler_tasks_total` |
 
 ## Implementation
 
-- Registers with capability: `"scheduler"`
-- Implements `contracts.Scheduler` (Schedule, Cancel, Status, List)
-- Uses `robfig/cron` for cron expression parsing
+- Registers with capabilities: `"scheduler"`, `"scheduler.cron"`
+- HTTP API mirrors `contracts.Scheduler` operations (Schedule, Cancel, Status, List)
+- Uses `robfig/cron/v3` for cron expression parsing (including descriptors)
 - Tasks are stored in-memory
-- Published events: `scheduler.task.started`, `.completed`, `.failed`, `.cancelled`
-- Timeout enforcement per task (from `SchedulerTask.Timeout`)
+- Default HTTP listen address: `:9200`

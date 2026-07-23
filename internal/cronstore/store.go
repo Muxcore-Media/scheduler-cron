@@ -116,7 +116,30 @@ func (s *Store) Get(id string) (*Task, error) {
 	if !ok {
 		return nil, fmt.Errorf("task %q not found", id)
 	}
-	return t, nil
+	cp := *t
+	if t.Payload != nil {
+		cp.Payload = append([]byte(nil), t.Payload...)
+	}
+	if t.Meta != nil {
+		cp.Meta = make(map[string]any, len(t.Meta))
+		for k, v := range t.Meta {
+			cp.Meta[k] = v
+		}
+	}
+	return &cp, nil
+}
+
+// SetStatus updates a task's status.
+func (s *Store) SetStatus(id, status string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	t, ok := s.tasks[id]
+	if !ok {
+		return fmt.Errorf("task %q not found", id)
+	}
+	t.Status = status
+	return nil
 }
 
 // List returns all scheduled tasks, optionally filtered by name substring.
