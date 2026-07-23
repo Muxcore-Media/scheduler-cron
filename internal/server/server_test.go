@@ -2,9 +2,11 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/Muxcore-Media/scheduler-cron/internal/cronstore"
@@ -130,8 +132,8 @@ func TestStatus(t *testing.T) {
 	}
 
 	var task struct {
-		Name  string `json:"name"`
-		ID    string `json:"id"`
+		Name   string `json:"name"`
+		ID     string `json:"id"`
 		Status string `json:"status"`
 	}
 	json.NewDecoder(w2.Body).Decode(&task)
@@ -172,5 +174,160 @@ func TestList(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&tasks)
 	if len(tasks) != 2 {
 		t.Errorf("expected 2 tasks, got %d", len(tasks))
+	}
+}
+
+type recordingPublisher struct {
+	mu     sync.Mutex
+	events []publishedEvent
+}
+
+type publishedEvent struct {
+	Type    string
+	Source  string
+	Payload []byte
+}
+
+func (p *recordingPublisher) Publish(ctx context.Context, eventType, source string, payload []byte) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, publishedEvent{Type: eventType, Source: source, Payload: append([]byte(nil), payload...)})
+	return nil
+}
+
+func (p *recordingPublisher) last() (publishedEvent, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.events) == 0 {
+		return publishedEvent{}, false
+	}
+	return p.events[len(p.events)-1], true
+}
+
+func TestOnFire_UpdatesStatusAndPublishes(t *testing.T) {
+	srv := newTestServer(t)
+	pub := &recordingPublisher{}
+	srv.SetEventPublisher(pub, "scheduler-cron")
+
+	id, err := srv.store.Add("fire-me", "0 0 * * *", []byte(`{"k":"v"}`), 0, map[string]any{"tag": "x"}, srv.onFire)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	srv.onFire(id)
+
+	task, err := srv.store.Get(id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if task.Status != "completed" {
+		t.Fatalf("Status = %q, want completed", task.Status)
+	}
+
+	ev, ok := pub.last()
+	if !ok {
+		t.Fatal("expected published event")
+	}
+	if ev.Type != "scheduler.task.fired" {
+		t.Errorf("event type = %q, want scheduler.task.fired", ev.Type)
+	}
+	if ev.Source != "scheduler-cron" {
+		t.Errorf("source = %q, want scheduler-cron", ev.Source)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+		t.Fatalf("payload json: %v", err)
+	}
+	if payload["task_id"] != id {
+		t.Errorf("payload task_id = %v, want %s", payload["task_id"], id)
+	}
+	if payload["name"] != "fire-me" {
+		t.Errorf("payload name = %v, want fire-me", payload["name"])
+	}
+}
+
+func TestOnFire_Webhook(t *testing.T) {
+	srv := newTestServer(t)
+
+	var gotBody map[string]any
+	var gotMethod string
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer hook.Close()
+
+	id, err := srv.store.Add("hook-me", "0 0 * * *", nil, 0, map[string]any{
+		"webhook_url": hook.URL,
+	}, srv.onFire)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	srv.onFire(id)
+
+	if gotMethod != http.MethodPost {
+		t.Fatalf("webhook method = %q, want POST", gotMethod)
+	}
+	if gotBody["task_id"] != id {
+		t.Errorf("webhook task_id = %v, want %s", gotBody["task_id"], id)
+	}
+	if gotBody["event"] != "scheduler.task.fired" {
+		t.Errorf("webhook event = %v", gotBody["event"])
+	}
+
+	task, err := srv.store.Get(id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if task.Status != "completed" {
+		t.Fatalf("Status = %q, want completed", task.Status)
+	}
+}
+
+func TestOnFire_WebhookFailureMarksFailed(t *testing.T) {
+	srv := newTestServer(t)
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer hook.Close()
+
+	id, err := srv.store.Add("fail-hook", "0 0 * * *", nil, 0, map[string]any{
+		"webhook_url": hook.URL,
+	}, srv.onFire)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	srv.onFire(id)
+
+	task, err := srv.store.Get(id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if task.Status != "failed" {
+		t.Fatalf("Status = %q, want failed", task.Status)
+	}
+}
+
+func TestOnFire_WebhookFromPayload(t *testing.T) {
+	srv := newTestServer(t)
+	called := false
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer hook.Close()
+
+	payload, _ := json.Marshal(map[string]string{"webhook_url": hook.URL})
+	id, err := srv.store.Add("payload-hook", "0 0 * * *", payload, 0, nil, srv.onFire)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	srv.onFire(id)
+	if !called {
+		t.Fatal("expected webhook from payload")
 	}
 }

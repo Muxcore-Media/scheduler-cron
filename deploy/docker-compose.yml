@@ -13,17 +13,18 @@ services:
       retries: 10
       start_period: 5s
 
-  your-module:
+  scheduler-cron:
     build:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "9400"
+      - "9200:9200"
     environment:
       MUXCORE_GRPC_ADDR: core:9090
       MUXCORE_INSECURE_DISABLE_TLS: "true"
       MUXCORE_LOG_LEVEL: debug
-      MUXCORE_MODULE_ID: your-module
+      MUXCORE_MODULE_ID: scheduler-cron
+      SCHEDULER_HTTP_ADDR: ":9200"
     depends_on:
       core:
         condition: service_healthy
