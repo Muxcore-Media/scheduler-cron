@@ -16,7 +16,7 @@ require (
 	github.com/Muxcore-Media/core/sdk/go/client v0.1.0
 	github.com/Muxcore-Media/core/sdk/go/module v0.1.0
 	github.com/robfig/cron/v3 v3.0.1
-	google.golang.org/grpc v1.82.1
+	google.golang.org/grpc v1.83.0
 )
 
 require (
