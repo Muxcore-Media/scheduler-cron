@@ -2,19 +2,11 @@ module github.com/Muxcore-Media/scheduler-cron
 
 go 1.26.4
 
-replace github.com/Muxcore-Media/core => ../core
-
-replace github.com/Muxcore-Media/core/sdk/go/module => ../core/sdk/go/module
-
-replace github.com/Muxcore-Media/core/pkg/contracts => ../core/pkg/contracts
-
-replace github.com/Muxcore-Media/core/sdk/go/client => ../core/sdk/go/client
-
 require (
-	github.com/Muxcore-Media/core v0.4.0
-	github.com/Muxcore-Media/core/pkg/contracts v0.0.0
-	github.com/Muxcore-Media/core/sdk/go/client v0.1.0
-	github.com/Muxcore-Media/core/sdk/go/module v0.1.0
+	github.com/Muxcore-Media/core v0.5.0
+	github.com/Muxcore-Media/core/pkg/contracts v0.5.0
+	github.com/Muxcore-Media/core/sdk/go/client v0.5.0
+	github.com/Muxcore-Media/core/sdk/go/module v0.5.0
 	github.com/robfig/cron/v3 v3.0.1
 	google.golang.org/grpc v1.82.1
 )
