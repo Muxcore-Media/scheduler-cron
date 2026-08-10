@@ -208,3 +208,35 @@ func TestSetStatus(t *testing.T) {
 		t.Fatal("expected error for missing task")
 	}
 }
+
+func TestAddOnce(t *testing.T) {
+	s, err := New("UTC")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Stop()
+
+	fired := make(chan struct{}, 1)
+	id, err := s.AddWithOptions("once", "@once", nil, 0, nil, func(string) {
+		fired <- struct{}{}
+	}, AddOptions{Once: true})
+	if err != nil {
+		t.Fatalf("AddWithOptions: %v", err)
+	}
+	if id == "" {
+		t.Fatal("empty id")
+	}
+	select {
+	case <-fired:
+	case <-time.After(time.Second):
+		t.Fatal("one-shot did not fire")
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if s.Len() == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("one-shot not removed, len=%d", s.Len())
+}

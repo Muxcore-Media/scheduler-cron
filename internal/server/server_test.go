@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Muxcore-Media/scheduler-cron/internal/cronstore"
 )
@@ -224,12 +226,24 @@ func TestOnFire_UpdatesStatusAndPublishes(t *testing.T) {
 		t.Fatalf("Status = %q, want completed", task.Status)
 	}
 
+	pub.mu.Lock()
+	types := make([]string, len(pub.events))
+	for i, e := range pub.events {
+		types[i] = e.Type
+	}
+	pub.mu.Unlock()
+	if len(types) < 2 {
+		t.Fatalf("events = %v, want fired+completed", types)
+	}
+	if types[0] != "scheduler.task.fired" {
+		t.Errorf("first event = %q", types[0])
+	}
+	if types[len(types)-1] != "scheduler.task.completed" {
+		t.Errorf("last event = %q", types[len(types)-1])
+	}
 	ev, ok := pub.last()
 	if !ok {
 		t.Fatal("expected published event")
-	}
-	if ev.Type != "scheduler.task.fired" {
-		t.Errorf("event type = %q, want scheduler.task.fired", ev.Type)
 	}
 	if ev.Source != "scheduler-cron" {
 		t.Errorf("source = %q, want scheduler-cron", ev.Source)
@@ -329,5 +343,54 @@ func TestOnFire_WebhookFromPayload(t *testing.T) {
 	srv.onFire(id)
 	if !called {
 		t.Fatal("expected webhook from payload")
+	}
+}
+
+func TestOnFire_WebhookTimeout(t *testing.T) {
+	srv := newTestServer(t)
+	pub := &recordingPublisher{}
+	srv.SetEventPublisher(pub, "scheduler-cron")
+
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer hook.Close()
+
+	id, err := srv.store.Add("slow-hook", "0 0 * * *", nil, 50*time.Millisecond, map[string]any{
+		"webhook_url": hook.URL,
+	}, srv.onFire)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	srv.onFire(id)
+
+	task, err := srv.store.Get(id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if task.Status != "timeout" {
+		t.Fatalf("Status = %q, want timeout", task.Status)
+	}
+	ev, ok := pub.last()
+	if !ok || ev.Type != "scheduler.task.timeout" {
+		t.Fatalf("last event = %+v, want scheduler.task.timeout", ev)
+	}
+}
+
+func TestSchedule_ParsesTimeoutAndOnce(t *testing.T) {
+	srv := newTestServer(t)
+	body := `{"name":"t","cron_expr":"@once","timeout":"2s","once":true}`
+	req := httptest.NewRequest(http.MethodPost, "/schedule", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// one-shot removes shortly after fire
+	time.Sleep(100 * time.Millisecond)
+	if srv.store.Len() != 0 {
+		t.Fatalf("expected one-shot removed, len=%d", srv.store.Len())
 	}
 }
