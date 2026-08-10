@@ -1,14 +1,15 @@
 {
   "name": "Scheduler Cron",
   "description": "Cron-based task scheduler for periodic and recurring jobs.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "author": "MuxCore",
   "roles": [
     "infrastructure"
   ],
   "capabilities": [
     "scheduler",
-    "scheduler.cron"
+    "scheduler.cron",
+    "settings"
   ],
   "contracts": []
 }

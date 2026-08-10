@@ -211,14 +211,14 @@ func TestOnFire_UpdatesStatusAndPublishes(t *testing.T) {
 	pub := &recordingPublisher{}
 	srv.SetEventPublisher(pub, "scheduler-cron")
 
-	id, err := srv.store.Add("fire-me", "0 0 * * *", []byte(`{"k":"v"}`), 0, map[string]any{"tag": "x"}, srv.onFire)
+	id, err := srv.store().Add("fire-me", "0 0 * * *", []byte(`{"k":"v"}`), 0, map[string]any{"tag": "x"}, srv.onFire)
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
 	srv.onFire(id)
 
-	task, err := srv.store.Get(id)
+	task, err := srv.store().Get(id)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestOnFire_Webhook(t *testing.T) {
 	}))
 	defer hook.Close()
 
-	id, err := srv.store.Add("hook-me", "0 0 * * *", nil, 0, map[string]any{
+	id, err := srv.store().Add("hook-me", "0 0 * * *", nil, 0, map[string]any{
 		"webhook_url": hook.URL,
 	}, srv.onFire)
 	if err != nil {
@@ -291,7 +291,7 @@ func TestOnFire_Webhook(t *testing.T) {
 		t.Errorf("webhook event = %v", gotBody["event"])
 	}
 
-	task, err := srv.store.Get(id)
+	task, err := srv.store().Get(id)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestOnFire_WebhookFailureMarksFailed(t *testing.T) {
 	}))
 	defer hook.Close()
 
-	id, err := srv.store.Add("fail-hook", "0 0 * * *", nil, 0, map[string]any{
+	id, err := srv.store().Add("fail-hook", "0 0 * * *", nil, 0, map[string]any{
 		"webhook_url": hook.URL,
 	}, srv.onFire)
 	if err != nil {
@@ -316,7 +316,7 @@ func TestOnFire_WebhookFailureMarksFailed(t *testing.T) {
 
 	srv.onFire(id)
 
-	task, err := srv.store.Get(id)
+	task, err := srv.store().Get(id)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -335,7 +335,7 @@ func TestOnFire_WebhookFromPayload(t *testing.T) {
 	defer hook.Close()
 
 	payload, _ := json.Marshal(map[string]string{"webhook_url": hook.URL})
-	id, err := srv.store.Add("payload-hook", "0 0 * * *", payload, 0, nil, srv.onFire)
+	id, err := srv.store().Add("payload-hook", "0 0 * * *", payload, 0, nil, srv.onFire)
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -357,7 +357,7 @@ func TestOnFire_WebhookTimeout(t *testing.T) {
 	}))
 	defer hook.Close()
 
-	id, err := srv.store.Add("slow-hook", "0 0 * * *", nil, 50*time.Millisecond, map[string]any{
+	id, err := srv.store().Add("slow-hook", "0 0 * * *", nil, 50*time.Millisecond, map[string]any{
 		"webhook_url": hook.URL,
 	}, srv.onFire)
 	if err != nil {
@@ -366,7 +366,7 @@ func TestOnFire_WebhookTimeout(t *testing.T) {
 
 	srv.onFire(id)
 
-	task, err := srv.store.Get(id)
+	task, err := srv.store().Get(id)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -390,7 +390,7 @@ func TestSchedule_ParsesTimeoutAndOnce(t *testing.T) {
 	}
 	// one-shot removes shortly after fire
 	time.Sleep(100 * time.Millisecond)
-	if srv.store.Len() != 0 {
-		t.Fatalf("expected one-shot removed, len=%d", srv.store.Len())
+	if srv.store().Len() != 0 {
+		t.Fatalf("expected one-shot removed, len=%d", srv.store().Len())
 	}
 }
