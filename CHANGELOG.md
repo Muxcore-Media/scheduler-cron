@@ -1,6 +1,14 @@
 # Changelog
 
 
+## [0.1.5] — 2026-08-10
+
+### Added
+
+- SettingsProvider for `timezone` / `store_path` / `catch_up` (`SCHEDULER_TZ` / `SCHEDULER_STORE_PATH` / `SCHEDULER_CATCH_UP`)
+- gRPC ModuleMesh settings multiplexed with HTTP via cmux on `SCHEDULER_HTTP_ADDR`
+- Advertises `settings` capability for admin-ui discovery
+
 ## [0.1.4] — 2026-08-10
 
 ### Fixed
