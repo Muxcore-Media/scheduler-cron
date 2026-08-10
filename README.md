@@ -49,7 +49,7 @@ Also supports:
 | `MUXCORE_MODULE_ID` | `scheduler-cron` | Module identity when registering with core |
 | `MUXCORE_INSECURE_DISABLE_TLS` | unset | Dev-only: disable TLS to core |
 
-Timezone for cron evaluation is UTC (`cronstore.New("")`). There is no CLI flag for timezone or missed-startup catch-up.
+Timezone: set `SCHEDULER_TZ` (IANA name; default UTC). One-shot: `"once": true` or `cron_expr: "@once"`. Task webhook timeout: `"timeout": "30s"`. Events: `scheduler.task.fired|completed|failed|timeout`. Still open: durable store, missed catch-up, muxcored integration test.
 
 ## HTTP API
 

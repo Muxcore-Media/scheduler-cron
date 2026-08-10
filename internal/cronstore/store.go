@@ -31,8 +31,11 @@ type Store struct {
 	eid   map[string]cron.EntryID // task ID → cron entry ID
 }
 
-// New creates a cron store.
+// New creates a cron store. location is an IANA timezone name; empty means UTC.
 func New(location string) (*Store, error) {
+	if location == "" {
+		location = "UTC"
+	}
 	loc, err := time.LoadLocation(location)
 	if err != nil {
 		return nil, fmt.Errorf("load location %q: %w", location, err)
@@ -46,8 +49,18 @@ func New(location string) (*Store, error) {
 	}, nil
 }
 
+// AddOptions configures optional Add behavior.
+type AddOptions struct {
+	Once bool // fire once then auto-remove (also accepted as cron_expr "@once")
+}
+
 // Add registers a new cron task. Returns the task ID.
 func (s *Store) Add(name, cronExpr string, payload []byte, timeout time.Duration, meta map[string]any, handler func(taskID string)) (string, error) {
+	return s.AddWithOptions(name, cronExpr, payload, timeout, meta, handler, AddOptions{})
+}
+
+// AddWithOptions registers a cron task with optional one-shot behavior.
+func (s *Store) AddWithOptions(name, cronExpr string, payload []byte, timeout time.Duration, meta map[string]any, handler func(taskID string), opts AddOptions) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("task name is required")
 	}
@@ -55,12 +68,16 @@ func (s *Store) Add(name, cronExpr string, payload []byte, timeout time.Duration
 		return "", fmt.Errorf("cron expression is required")
 	}
 
-	// Validate the expression before using it.
-	parser := cron.NewParser(
-		cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor,
-	)
-	if _, err := parser.Parse(cronExpr); err != nil {
-		return "", fmt.Errorf("invalid cron expression %q: %s", cronExpr, err)
+	once := opts.Once || strings.EqualFold(cronExpr, "@once")
+	if once {
+		cronExpr = "@once"
+	} else {
+		parser := cron.NewParser(
+			cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor,
+		)
+		if _, err := parser.Parse(cronExpr); err != nil {
+			return "", fmt.Errorf("invalid cron expression %q: %s", cronExpr, err)
+		}
 	}
 
 	id := newID()
@@ -76,17 +93,31 @@ func (s *Store) Add(name, cronExpr string, payload []byte, timeout time.Duration
 		CreatedAt: time.Now(),
 	}
 
-	entryID, err := s.cron.AddFunc(cronExpr, func() {
+	fire := func() {
 		slog.Info("cron task fired", "task_id", id, "name", name, "expr", cronExpr)
 		handler(id)
-	})
-	if err != nil {
-		return "", fmt.Errorf("add cron func: %w", err)
+		if once {
+			if err := s.Remove(id); err != nil {
+				slog.Debug("one-shot remove after fire", "task_id", id, "error", err)
+			}
+		}
 	}
 
 	s.mu.Lock()
 	s.tasks[id] = task
-	s.eid[id] = entryID
+	if once {
+		// Run shortly after schedule so HTTP /schedule returns before fire.
+		timer := time.AfterFunc(10*time.Millisecond, fire)
+		_ = timer
+	} else {
+		entryID, err := s.cron.AddFunc(cronExpr, fire)
+		if err != nil {
+			delete(s.tasks, id)
+			s.mu.Unlock()
+			return "", fmt.Errorf("add cron func: %w", err)
+		}
+		s.eid[id] = entryID
+	}
 	s.mu.Unlock()
 
 	return id, nil
@@ -97,13 +128,14 @@ func (s *Store) Remove(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	eid, ok := s.eid[id]
-	if !ok {
+	if _, ok := s.tasks[id]; !ok {
 		return fmt.Errorf("task %q not found", id)
 	}
-	s.cron.Remove(eid)
+	if eid, ok := s.eid[id]; ok {
+		s.cron.Remove(eid)
+		delete(s.eid, id)
+	}
 	delete(s.tasks, id)
-	delete(s.eid, id)
 	return nil
 }
 

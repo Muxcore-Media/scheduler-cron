@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Muxcore-Media/scheduler-cron/internal/cronstore"
@@ -39,7 +41,8 @@ func New(store *cronstore.Store) *Server {
 		mux:      http.NewServeMux(),
 		moduleID: "scheduler-cron",
 		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
+			// Per-request timeouts come from task Timeout via context.
+			Timeout: 0,
 		},
 	}
 	s.mux.HandleFunc("/schedule", s.handleSchedule)
@@ -85,6 +88,7 @@ func (s *Server) handleSchedule(w http.ResponseWriter, r *http.Request) {
 		CronExpr string         `json:"cron_expr"`
 		Payload  []byte         `json:"payload,omitempty"`
 		Timeout  string         `json:"timeout,omitempty"`
+		Once     bool           `json:"once,omitempty"`
 		Meta     map[string]any `json:"meta,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -96,7 +100,21 @@ func (s *Server) handleSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := s.store.Add(req.Name, req.CronExpr, req.Payload, 0, req.Meta, s.onFire)
+	var timeout time.Duration
+	if req.Timeout != "" {
+		d, err := time.ParseDuration(req.Timeout)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid timeout: "+err.Error())
+			return
+		}
+		if d < 0 {
+			writeError(w, http.StatusBadRequest, "timeout must be non-negative")
+			return
+		}
+		timeout = d
+	}
+
+	id, err := s.store.AddWithOptions(req.Name, req.CronExpr, req.Payload, timeout, req.Meta, s.onFire, cronstore.AddOptions{Once: req.Once})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -116,31 +134,62 @@ func (s *Server) onFire(taskID string) {
 		slog.Warn("cron fire: set running", "task_id", taskID, "error", err)
 	}
 
+	s.publish(task, "scheduler.task.fired", nil)
+
 	webhookURL := webhookURLFrom(task)
 	fireErr := s.postWebhook(webhookURL, task)
 
-	eventPayload, _ := json.Marshal(map[string]any{
+	status := "completed"
+	eventType := "scheduler.task.completed"
+	if fireErr != nil {
+		if isTimeout(fireErr) {
+			status = "timeout"
+			eventType = "scheduler.task.timeout"
+		} else {
+			status = "failed"
+			eventType = "scheduler.task.failed"
+		}
+		slog.Warn("cron fire: webhook failed", "task_id", taskID, "error", fireErr, "status", status)
+	}
+	if err := s.store.SetStatus(taskID, status); err != nil {
+		slog.Warn("cron fire: set status", "task_id", taskID, "status", status, "error", err)
+	}
+	extra := map[string]any{}
+	if fireErr != nil {
+		extra["error"] = fireErr.Error()
+	}
+	s.publish(task, eventType, extra)
+}
+
+func isTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	if ne, ok := err.(interface{ Timeout() bool }); ok && ne.Timeout() {
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded) || strings.Contains(strings.ToLower(err.Error()), "timeout")
+}
+
+func (s *Server) publish(task *cronstore.Task, eventType string, extra map[string]any) {
+	if s.events == nil || task == nil {
+		return
+	}
+	payload := map[string]any{
 		"task_id":   task.ID,
 		"name":      task.Name,
 		"cron_expr": task.CronExpr,
 		"payload":   task.Payload,
 		"meta":      task.Meta,
-	})
-	if s.events != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := s.events.Publish(ctx, "scheduler.task.fired", s.moduleID, eventPayload); err != nil {
-			slog.Warn("cron fire: publish event", "task_id", taskID, "error", err)
-		}
 	}
-
-	status := "completed"
-	if fireErr != nil {
-		status = "failed"
-		slog.Warn("cron fire: webhook failed", "task_id", taskID, "error", fireErr)
+	for k, v := range extra {
+		payload[k] = v
 	}
-	if err := s.store.SetStatus(taskID, status); err != nil {
-		slog.Warn("cron fire: set status", "task_id", taskID, "status", status, "error", err)
+	b, _ := json.Marshal(payload)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.events.Publish(ctx, eventType, s.moduleID, b); err != nil {
+		slog.Warn("cron fire: publish event", "task_id", task.ID, "type", eventType, "error", err)
 	}
 }
 
@@ -182,7 +231,13 @@ func (s *Server) postWebhook(url string, task *cronstore.Task) error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	timeout := task.Timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

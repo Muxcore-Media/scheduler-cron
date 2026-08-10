@@ -49,7 +49,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Scheduler Cron",
-		Version:      "0.1.0",
+		Version:      "0.1.1",
 		Roles:        []string{"infrastructure"},
 		Description:  "Cron-based task scheduler for periodic and recurring jobs",
 		Author:       "MuxCore",
@@ -60,7 +60,8 @@ func (m *Module) Info() contracts.ModuleInfo {
 
 func (m *Module) Init(ctx context.Context) error {
 	var err error
-	m.store, err = cronstore.New("")
+	tz := os.Getenv("SCHEDULER_TZ")
+	m.store, err = cronstore.New(tz)
 	if err != nil {
 		return fmt.Errorf("init cron store: %w", err)
 	}
@@ -69,8 +70,17 @@ func (m *Module) Init(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", m.httpAddr, err)
 	}
-	slog.Info("scheduler-cron initialized", "addr", m.httpAddr)
+	slog.Info("scheduler-cron initialized", "addr", m.httpAddr, "tz", firstNonEmpty(tz, "UTC"))
 	return nil
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func (m *Module) Start(ctx context.Context) error {

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.1] — 2026-08-09
+
+### Added
+
+- Lifecycle events: `scheduler.task.fired`, `.completed`, `.failed`, `.timeout`
+- Per-task webhook `timeout` (Go duration) on `/schedule`
+- One-shot tasks via `"once": true` or `cron_expr: "@once"`
+- `SCHEDULER_TZ` for cron evaluation timezone (default UTC)
+
 ## [0.1.0] — Unreleased
 
 ### Added
