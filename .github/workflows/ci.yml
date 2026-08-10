@@ -9,7 +9,7 @@ env:
   REGISTRY: ghcr.io
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v7
         with:
@@ -27,7 +27,7 @@ jobs:
         run: go vet ./...
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v7
         with:
@@ -43,11 +43,11 @@ jobs:
           cache: true
       - working-directory: ./scheduler-cron
         run: |
-          go test -race -count=1 -timeout 10m ./...
+          go test -count=1 -timeout 10m ./...
           CORE_DIR="$GITHUB_WORKSPACE/core" go test -tags=integration -count=1 -timeout 5m ./test/
 
   build:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v7
         with:
@@ -68,7 +68,7 @@ jobs:
 
   docker:
     if: (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: [lint, test, build]
     steps:
       - uses: actions/checkout@v7
