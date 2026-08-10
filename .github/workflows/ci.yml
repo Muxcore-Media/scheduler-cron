@@ -42,7 +42,9 @@ jobs:
           go-version: "1.26"
           cache: true
       - working-directory: ./scheduler-cron
-        run: go test -race -count=1 -timeout 10m ./...
+        run: |
+          go test -race -count=1 -timeout 10m ./...
+          CORE_DIR="$GITHUB_WORKSPACE/core" go test -tags=integration -count=1 -timeout 5m ./test/
 
   build:
     runs-on: ubuntu-latest
