@@ -1,12 +1,12 @@
 # scheduler-cron — Remaining Work
 
 ### Events & Observability
-- [ ] Publish events on task lifecycle (`scheduler.task.*`)
-- [ ] Task timeout enforcement
+- [x] Publish events on task lifecycle (`scheduler.task.*`)
+- [x] Task timeout enforcement
 
 ### Persistence & Advanced
-- [ ] Optional persistent schedule store via DatabaseProvider
-- [ ] Missed schedule catch-up on restart
-- [ ] Configurable timezone (currently UTC only)
-- [ ] One-shot tasks (non-recurring)
-- [ ] Integration test with running muxcored
+- [x] Optional persistent schedule store via DatabaseProvider / JSON file (`SCHEDULER_STORE_PATH`)
+- [x] Missed schedule catch-up on restart
+- [x] Configurable timezone (`SCHEDULER_TZ`)
+- [x] One-shot tasks (non-recurring)
+- [x] Integration test with running muxcored (`go test -tags=integration ./test`)
