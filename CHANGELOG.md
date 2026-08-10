@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.3] — 2026-08-10
+
+### Added
+
+- Muxcored integration test (`go test -tags=integration ./test`): boots muxcored, registers scheduler, discovers by capability, fires `@once` webhook
+
 ## [0.1.2] — 2026-08-09
 
 ### Added
