@@ -50,7 +50,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Scheduler Cron",
-		Version:      "0.1.2",
+		Version:      "0.1.3",
 		Roles:        []string{"infrastructure"},
 		Description:  "Cron scheduler with persistent store and missed-fire catch-up",
 		Author:       "MuxCore",
