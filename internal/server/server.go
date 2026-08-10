@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Muxcore-Media/scheduler-cron/internal/cronstore"
@@ -27,7 +28,7 @@ type EventPublisher interface {
 //	GET    /status/{id} — get task status
 //	GET    /list        — list tasks (?name=filter)
 type Server struct {
-	store      *cronstore.Store
+	storePtr   atomic.Pointer[cronstore.Store]
 	mux        *http.ServeMux
 	events     EventPublisher
 	moduleID   string
@@ -37,7 +38,6 @@ type Server struct {
 // New creates an HTTP server backed by the given cron store.
 func New(store *cronstore.Store) *Server {
 	s := &Server{
-		store:    store,
 		mux:      http.NewServeMux(),
 		moduleID: "scheduler-cron",
 		httpClient: &http.Client{
@@ -45,6 +45,7 @@ func New(store *cronstore.Store) *Server {
 			Timeout: 0,
 		},
 	}
+	s.storePtr.Store(store)
 	s.mux.HandleFunc("/schedule", s.handleSchedule)
 	s.mux.HandleFunc("/cancel/", s.handleCancel)
 	s.mux.HandleFunc("/status/", s.handleStatus)
@@ -52,6 +53,15 @@ func New(store *cronstore.Store) *Server {
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/metrics", s.handleMetrics)
 	return s
+}
+
+// ReplaceStore swaps the backing cron store. Returns the previous store (caller should Stop).
+func (s *Server) ReplaceStore(store *cronstore.Store) *cronstore.Store {
+	return s.storePtr.Swap(store)
+}
+
+func (s *Server) store() *cronstore.Store {
+	return s.storePtr.Load()
 }
 
 // SetEventPublisher sets an optional events client for lifecycle events.
@@ -70,7 +80,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	fmt.Fprintf(w, "# HELP scheduler_tasks_total Total scheduled tasks\n")
 	fmt.Fprintf(w, "# TYPE scheduler_tasks_total gauge\n")
-	fmt.Fprintf(w, "scheduler_tasks_total %d\n", s.store.Len())
+	fmt.Fprintf(w, "scheduler_tasks_total %d\n", s.store().Len())
 }
 
 // Handler returns the HTTP handler for mounting on a custom mux.
@@ -114,7 +124,7 @@ func (s *Server) handleSchedule(w http.ResponseWriter, r *http.Request) {
 		timeout = d
 	}
 
-	id, err := s.store.AddWithOptions(req.Name, req.CronExpr, req.Payload, timeout, req.Meta, s.onFire, cronstore.AddOptions{Once: req.Once})
+	id, err := s.store().AddWithOptions(req.Name, req.CronExpr, req.Payload, timeout, req.Meta, s.onFire, cronstore.AddOptions{Once: req.Once})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -129,13 +139,13 @@ func (s *Server) OnFire(taskID string) {
 
 // onFire runs when a scheduled task triggers.
 func (s *Server) onFire(taskID string) {
-	task, err := s.store.Get(taskID)
+	task, err := s.store().Get(taskID)
 	if err != nil {
 		slog.Warn("cron fire: task missing", "task_id", taskID, "error", err)
 		return
 	}
 
-	if err := s.store.SetStatus(taskID, "running"); err != nil {
+	if err := s.store().SetStatus(taskID, "running"); err != nil {
 		slog.Warn("cron fire: set running", "task_id", taskID, "error", err)
 	}
 
@@ -156,7 +166,7 @@ func (s *Server) onFire(taskID string) {
 		}
 		slog.Warn("cron fire: webhook failed", "task_id", taskID, "error", fireErr, "status", status)
 	}
-	if err := s.store.SetStatus(taskID, status); err != nil {
+	if err := s.store().SetStatus(taskID, status); err != nil {
 		slog.Warn("cron fire: set status", "task_id", taskID, "status", status, "error", err)
 	}
 	extra := map[string]any{}
@@ -268,7 +278,7 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "task ID is required")
 		return
 	}
-	if err := s.store.Remove(id); err != nil {
+	if err := s.store().Remove(id); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
@@ -285,7 +295,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "task ID is required")
 		return
 	}
-	task, err := s.store.Get(id)
+	task, err := s.store().Get(id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -299,7 +309,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filter := r.URL.Query().Get("name")
-	tasks := s.store.List(filter)
+	tasks := s.store().List(filter)
 	writeJSON(w, http.StatusOK, tasks)
 }
 

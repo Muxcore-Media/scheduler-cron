@@ -7,27 +7,42 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
+
+	"github.com/soheilhy/cmux"
+	"google.golang.org/grpc"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"github.com/Muxcore-Media/core/sdk/go/client"
+	modulesdk "github.com/Muxcore-Media/core/sdk/go/module"
 	"github.com/Muxcore-Media/scheduler-cron/internal/cronstore"
 	"github.com/Muxcore-Media/scheduler-cron/internal/server"
 )
 
 type Module struct {
-	store    *cronstore.Store
-	srv      *server.Server
-	httpSrv  *http.Server
-	lis      net.Listener
-	mc       *client.Client
-	id       string
-	httpAddr string
+	store      *cronstore.Store
+	srv        *server.Server
+	httpSrv    *http.Server
+	grpcSrv    *grpc.Server
+	lis        net.Listener
+	cm         cmux.CMux
+	mc         *client.Client
+	id         string
+	httpAddr   string
+	cfgMu      sync.RWMutex
+	tz         string
+	storePath  string
+	catchUp    bool
 }
 
 type Config struct {
-	ID       string
-	HTTPAddr string
+	ID        string
+	HTTPAddr  string
+	TZ        string
+	StorePath string
+	CatchUp   *bool
 }
 
 func NewModule(cfg Config) *Module {
@@ -40,9 +55,31 @@ func NewModule(cfg Config) *Module {
 	if v := os.Getenv("SCHEDULER_HTTP_ADDR"); v != "" {
 		cfg.HTTPAddr = v
 	}
+	tz := cfg.TZ
+	if tz == "" {
+		tz = os.Getenv("SCHEDULER_TZ")
+	}
+	if tz == "" {
+		tz = "UTC"
+	}
+	storePath := cfg.StorePath
+	if storePath == "" {
+		storePath = strings.TrimSpace(os.Getenv("SCHEDULER_STORE_PATH"))
+	}
+	catchUp := true
+	if cfg.CatchUp != nil {
+		catchUp = *cfg.CatchUp
+	} else if v := strings.TrimSpace(os.Getenv("SCHEDULER_CATCH_UP")); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			catchUp = b
+		}
+	}
 	return &Module{
-		id:       cfg.ID,
-		httpAddr: cfg.HTTPAddr,
+		id:        cfg.ID,
+		httpAddr:  cfg.HTTPAddr,
+		tz:        tz,
+		storePath: storePath,
+		catchUp:   catchUp,
 	}
 }
 
@@ -50,57 +87,73 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Scheduler Cron",
-		Version:      "0.1.4",
+		Version:      "0.1.5",
 		Roles:        []string{"infrastructure"},
 		Description:  "Cron scheduler with persistent store and missed-fire catch-up",
 		Author:       "MuxCore",
-		Capabilities: []string{contracts.CapabilityScheduler, "scheduler.cron"},
+		Capabilities: []string{contracts.CapabilityScheduler, "scheduler.cron", "settings"},
 		HTTPAddr:     m.httpAddr,
 	}
 }
 
 func (m *Module) Init(ctx context.Context) error {
-	var err error
-	tz := os.Getenv("SCHEDULER_TZ")
-	m.store, err = cronstore.New(tz)
+	m.cfgMu.RLock()
+	tz := m.tz
+	storePath := m.storePath
+	catchUp := m.catchUp
+	m.cfgMu.RUnlock()
+
+	store, err := cronstore.New(tz)
 	if err != nil {
 		return fmt.Errorf("init cron store: %w", err)
 	}
-	storePath := strings.TrimSpace(os.Getenv("SCHEDULER_STORE_PATH"))
+	store.SetCatchUp(catchUp)
 	if storePath != "" {
-		m.store.EnablePersist(storePath)
+		store.EnablePersist(storePath)
 	}
-	m.srv = server.New(m.store)
+	m.store = store
+	m.srv = server.New(store)
 	if storePath != "" {
-		if err := m.store.Restore(m.srv.OnFire); err != nil {
+		if err := store.Restore(m.srv.OnFire); err != nil {
+			store.Stop()
 			return fmt.Errorf("restore store %q: %w", storePath, err)
 		}
-		slog.Info("scheduler-cron restored tasks", "path", storePath, "count", m.store.Len())
+		slog.Info("scheduler-cron restored tasks", "path", storePath, "count", store.Len())
 	}
 	m.lis, err = net.Listen("tcp", m.httpAddr)
 	if err != nil {
+		store.Stop()
 		return fmt.Errorf("listen %s: %w", m.httpAddr, err)
 	}
-	slog.Info("scheduler-cron initialized", "addr", m.httpAddr, "tz", firstNonEmpty(tz, "UTC"), "persist", storePath)
+	slog.Info("scheduler-cron initialized", "addr", m.httpAddr, "tz", tz, "persist", storePath, "catch_up", catchUp)
 	return nil
 }
 
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 func (m *Module) Start(ctx context.Context) error {
+	m.cm = cmux.New(m.lis)
+	grpcL := m.cm.MatchWithWriters(cmux.HTTP2MatchHeaderFieldSendSettings("content-type", "application/grpc"))
+	httpL := m.cm.Match(cmux.Any())
+
+	m.grpcSrv = grpc.NewServer()
+	modulesdk.RegisterSettings(m.grpcSrv, m.id, m)
 	m.httpSrv = &http.Server{Handler: m.srv.Handler()}
+
 	go m.dialCore(ctx)
 	go func() {
+		slog.Info("scheduler-cron gRPC settings started", "addr", m.httpAddr)
+		if err := m.grpcSrv.Serve(grpcL); err != nil {
+			slog.Error("scheduler-cron gRPC error", "error", err)
+		}
+	}()
+	go func() {
 		slog.Info("scheduler-cron HTTP started", "addr", m.httpAddr)
-		if err := m.httpSrv.Serve(m.lis); err != nil && err != http.ErrServerClosed {
+		if err := m.httpSrv.Serve(httpL); err != nil && err != http.ErrServerClosed {
 			slog.Error("scheduler-cron HTTP error", "error", err)
+		}
+	}()
+	go func() {
+		if err := m.cm.Serve(); err != nil {
+			slog.Debug("scheduler-cron cmux closed", "error", err)
 		}
 	}()
 	return nil
@@ -128,7 +181,13 @@ func (m *Module) dialCore(ctx context.Context) {
 
 func (m *Module) Stop(ctx context.Context) error {
 	if m.httpSrv != nil {
-		m.httpSrv.Shutdown(ctx)
+		_ = m.httpSrv.Shutdown(ctx)
+	}
+	if m.grpcSrv != nil {
+		m.grpcSrv.GracefulStop()
+	}
+	if m.cm != nil {
+		m.cm.Close()
 	}
 	if m.mc != nil {
 		m.mc.Close()
