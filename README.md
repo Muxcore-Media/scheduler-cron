@@ -49,7 +49,7 @@ Also supports:
 | `MUXCORE_MODULE_ID` | `scheduler-cron` | Module identity when registering with core |
 | `MUXCORE_INSECURE_DISABLE_TLS` | unset | Dev-only: disable TLS to core |
 
-Timezone: set `SCHEDULER_TZ` (IANA name; default UTC). One-shot: `"once": true` or `cron_expr: "@once"`. Task webhook timeout: `"timeout": "30s"`. Events: `scheduler.task.fired|completed|failed|timeout`. Persistence: set `SCHEDULER_STORE_PATH` (JSON). Missed fires are caught up on restore. Still open: muxcored integration test.
+Timezone: set `SCHEDULER_TZ` (IANA name; default UTC). One-shot: `"once": true` or `cron_expr: "@once"`. Task webhook timeout: `"timeout": "30s"`. Events: `scheduler.task.fired|completed|failed|timeout`. Persistence: set `SCHEDULER_STORE_PATH` (JSON). Integration: `go test -tags=integration ./test` (needs `MUXCORED_BIN` or `CORE_DIR` / sibling `../core`).
 
 ## HTTP API
 
