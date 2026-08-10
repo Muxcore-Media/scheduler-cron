@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"github.com/Muxcore-Media/core/sdk/go/client"
@@ -49,9 +50,9 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Scheduler Cron",
-		Version:      "0.1.1",
+		Version:      "0.1.2",
 		Roles:        []string{"infrastructure"},
-		Description:  "Cron-based task scheduler for periodic and recurring jobs",
+		Description:  "Cron scheduler with persistent store and missed-fire catch-up",
 		Author:       "MuxCore",
 		Capabilities: []string{contracts.CapabilityScheduler, "scheduler.cron"},
 		HTTPAddr:     m.httpAddr,
@@ -65,12 +66,22 @@ func (m *Module) Init(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("init cron store: %w", err)
 	}
+	storePath := strings.TrimSpace(os.Getenv("SCHEDULER_STORE_PATH"))
+	if storePath != "" {
+		m.store.EnablePersist(storePath)
+	}
 	m.srv = server.New(m.store)
+	if storePath != "" {
+		if err := m.store.Restore(m.srv.OnFire); err != nil {
+			return fmt.Errorf("restore store %q: %w", storePath, err)
+		}
+		slog.Info("scheduler-cron restored tasks", "path", storePath, "count", m.store.Len())
+	}
 	m.lis, err = net.Listen("tcp", m.httpAddr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", m.httpAddr, err)
 	}
-	slog.Info("scheduler-cron initialized", "addr", m.httpAddr, "tz", firstNonEmpty(tz, "UTC"))
+	slog.Info("scheduler-cron initialized", "addr", m.httpAddr, "tz", firstNonEmpty(tz, "UTC"), "persist", storePath)
 	return nil
 }
 
