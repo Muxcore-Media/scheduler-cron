@@ -69,3 +69,6 @@ Timezone: set `SCHEDULER_TZ` (IANA name; default UTC). One-shot: `"once": true` 
 - Uses `robfig/cron/v3` for cron expression parsing (including descriptors)
 - Tasks are stored in-memory
 - Default HTTP listen address: `:9200`
+
+
+Operator surface: [`muxcorectl-cli`](https://github.com/Muxcore-Media/muxcorectl-cli) `schedules list|status|add|cancel` (discovers this module’s `HttpAddr`, or set `--scheduler-url` / `SCHEDULER_URL`).
