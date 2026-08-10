@@ -122,6 +122,11 @@ func (s *Server) handleSchedule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"task_id": id})
 }
 
+// OnFire runs when a scheduled task triggers (exported for store Restore).
+func (s *Server) OnFire(taskID string) {
+	s.onFire(taskID)
+}
+
 // onFire runs when a scheduled task triggers.
 func (s *Server) onFire(taskID string) {
 	task, err := s.store.Get(taskID)

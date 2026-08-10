@@ -1,6 +1,7 @@
 package cronstore
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -239,4 +240,80 @@ func TestAddOnce(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("one-shot not removed, len=%d", s.Len())
+}
+
+func TestPersistAndRestore(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tasks.json")
+
+	s1, err := New("UTC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s1.EnablePersist(path)
+	handler := func(string) {}
+	id, err := s1.Add("daily", "0 0 * * *", []byte(`{"a":1}`), 0, map[string]any{"k": "v"}, handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s1.Stop()
+
+	s2, err := New("UTC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2.EnablePersist(path)
+	s2.SetCatchUp(false)
+	if err := s2.Restore(handler); err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Stop()
+	if s2.Len() != 1 {
+		t.Fatalf("len=%d", s2.Len())
+	}
+	task, err := s2.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Name != "daily" || task.CronExpr != "0 0 * * *" {
+		t.Fatalf("task=%+v", task)
+	}
+}
+
+func TestCatchUpMissed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tasks.json")
+	s1, err := New("UTC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s1.EnablePersist(path)
+	id, err := s1.Add("every-min", "* * * * *", nil, 0, nil, func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// backdate last fired so next is in the past
+	s1.mu.Lock()
+	s1.tasks[id].LastFired = time.Now().Add(-2 * time.Minute)
+	s1.tasks[id].CreatedAt = time.Now().Add(-2 * time.Hour)
+	_ = s1.saveLocked()
+	s1.mu.Unlock()
+	s1.Stop()
+
+	fired := make(chan struct{}, 1)
+	s2, err := New("UTC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2.EnablePersist(path)
+	s2.SetCatchUp(true)
+	if err := s2.Restore(func(string) { fired <- struct{}{} }); err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Stop()
+	select {
+	case <-fired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected catch-up fire")
+	}
 }
