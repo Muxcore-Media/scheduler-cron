@@ -78,9 +78,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	fmt.Fprintf(w, "# HELP scheduler_tasks_total Total scheduled tasks\n")
-	fmt.Fprintf(w, "# TYPE scheduler_tasks_total gauge\n")
-	fmt.Fprintf(w, "scheduler_tasks_total %d\n", s.store().Len())
+	_, _ = fmt.Fprintf(w, "# HELP scheduler_tasks_total Total scheduled tasks\n")
+	_, _ = fmt.Fprintf(w, "# TYPE scheduler_tasks_total gauge\n")
+	_, _ = fmt.Fprintf(w, "scheduler_tasks_total %d\n", s.store().Len())
 }
 
 // Handler returns the HTTP handler for mounting on a custom mux.
@@ -261,7 +261,7 @@ func (s *Server) postWebhook(url string, task *cronstore.Task) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("webhook returned %d", resp.StatusCode)
 	}
@@ -316,7 +316,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
