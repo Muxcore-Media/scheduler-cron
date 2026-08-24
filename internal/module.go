@@ -22,19 +22,19 @@ import (
 )
 
 type Module struct {
-	store      *cronstore.Store
-	srv        *server.Server
-	httpSrv    *http.Server
-	grpcSrv    *grpc.Server
-	lis        net.Listener
-	cm         cmux.CMux
-	mc         *client.Client
-	id         string
-	httpAddr   string
-	cfgMu      sync.RWMutex
-	tz         string
-	storePath  string
-	catchUp    bool
+	store     *cronstore.Store
+	srv       *server.Server
+	httpSrv   *http.Server
+	grpcSrv   *grpc.Server
+	lis       net.Listener
+	cm        cmux.CMux
+	mc        *client.Client
+	id        string
+	httpAddr  string
+	cfgMu     sync.RWMutex
+	tz        string
+	storePath string
+	catchUp   bool
 }
 
 type Config struct {
@@ -190,7 +190,7 @@ func (m *Module) Stop(ctx context.Context) error {
 		m.cm.Close()
 	}
 	if m.mc != nil {
-		m.mc.Close()
+		_ = m.mc.Close()
 	}
 	if m.store != nil {
 		m.store.Stop()
