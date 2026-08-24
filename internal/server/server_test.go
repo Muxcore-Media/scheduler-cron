@@ -89,7 +89,9 @@ func TestCancel(t *testing.T) {
 	var resp struct {
 		TaskID string `json:"task_id"`
 	}
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 
 	// Cancel it.
 	req2 := httptest.NewRequest(http.MethodDelete, "/cancel/"+resp.TaskID, nil)
@@ -123,7 +125,9 @@ func TestStatus(t *testing.T) {
 	var resp struct {
 		TaskID string `json:"task_id"`
 	}
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 
 	// Check status.
 	req2 := httptest.NewRequest(http.MethodGet, "/status/"+resp.TaskID, nil)
@@ -138,7 +142,9 @@ func TestStatus(t *testing.T) {
 		ID     string `json:"id"`
 		Status string `json:"status"`
 	}
-	json.NewDecoder(w2.Body).Decode(&task)
+	if err := json.NewDecoder(w2.Body).Decode(&task); err != nil {
+		t.Fatalf("decode task: %v", err)
+	}
 	if task.Name != "status-check" {
 		t.Errorf("Name = %q, want %q", task.Name, "status-check")
 	}
@@ -173,7 +179,9 @@ func TestList(t *testing.T) {
 		t.Fatalf("GET /list: %d", w.Code)
 	}
 	var tasks []any
-	json.NewDecoder(w.Body).Decode(&tasks)
+	if err := json.NewDecoder(w.Body).Decode(&tasks); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if len(tasks) != 2 {
 		t.Errorf("expected 2 tasks, got %d", len(tasks))
 	}
@@ -267,7 +275,7 @@ func TestOnFire_Webhook(t *testing.T) {
 	var gotMethod string
 	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
-		json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer hook.Close()

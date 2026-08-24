@@ -144,9 +144,15 @@ func TestList(t *testing.T) {
 	}
 	defer s.Stop()
 
-	s.Add("alpha", "* * * * *", nil, 0, nil, func(id string) {})
-	s.Add("beta-one", "*/5 * * * *", nil, 0, nil, func(id string) {})
-	s.Add("beta-two", "*/10 * * * *", nil, 0, nil, func(id string) {})
+	if _, err := s.Add("alpha", "* * * * *", nil, 0, nil, func(id string) {}); err != nil {
+		t.Fatalf("Add alpha: %v", err)
+	}
+	if _, err := s.Add("beta-one", "*/5 * * * *", nil, 0, nil, func(id string) {}); err != nil {
+		t.Fatalf("Add beta-one: %v", err)
+	}
+	if _, err := s.Add("beta-two", "*/10 * * * *", nil, 0, nil, func(id string) {}); err != nil {
+		t.Fatalf("Add beta-two: %v", err)
+	}
 
 	if len(s.List("")) != 3 {
 		t.Errorf("List() = %d, want 3", len(s.List("")))
