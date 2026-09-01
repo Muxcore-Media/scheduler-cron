@@ -11,11 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Muxcore-Media/contracts-media/events"
 	"github.com/Muxcore-Media/scheduler-cron/internal/cronstore"
 )
 
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
+	t.Setenv("SCHEDULER_WEBHOOK_ALLOW_PRIVATE", "1")
 	store, err := cronstore.New("UTC")
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -243,10 +245,10 @@ func TestOnFire_UpdatesStatusAndPublishes(t *testing.T) {
 	if len(types) < 2 {
 		t.Fatalf("events = %v, want fired+completed", types)
 	}
-	if types[0] != "scheduler.task.fired" {
+	if types[0] != events.EventSchedulerTaskFired {
 		t.Errorf("first event = %q", types[0])
 	}
-	if types[len(types)-1] != "scheduler.task.completed" {
+	if types[len(types)-1] != events.EventSchedulerTaskCompleted {
 		t.Errorf("last event = %q", types[len(types)-1])
 	}
 	ev, ok := pub.last()
@@ -295,7 +297,7 @@ func TestOnFire_Webhook(t *testing.T) {
 	if gotBody["task_id"] != id {
 		t.Errorf("webhook task_id = %v, want %s", gotBody["task_id"], id)
 	}
-	if gotBody["event"] != "scheduler.task.fired" {
+	if gotBody["event"] != events.EventSchedulerTaskFired {
 		t.Errorf("webhook event = %v", gotBody["event"])
 	}
 
@@ -382,8 +384,8 @@ func TestOnFire_WebhookTimeout(t *testing.T) {
 		t.Fatalf("Status = %q, want timeout", task.Status)
 	}
 	ev, ok := pub.last()
-	if !ok || ev.Type != "scheduler.task.timeout" {
-		t.Fatalf("last event = %+v, want scheduler.task.timeout", ev)
+	if !ok || ev.Type != events.EventSchedulerTaskTimeout {
+		t.Fatalf("last event = %+v, want %s", ev, events.EventSchedulerTaskTimeout)
 	}
 }
 
@@ -397,8 +399,125 @@ func TestSchedule_ParsesTimeoutAndOnce(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	// one-shot removes shortly after fire
-	time.Sleep(100 * time.Millisecond)
-	if srv.store().Len() != 0 {
-		t.Fatalf("expected one-shot removed, len=%d", srv.store().Len())
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if srv.store().Len() == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expected one-shot removed, len=%d", srv.store().Len())
+}
+
+func TestOnFire_SkipsWhenRunning(t *testing.T) {
+	srv := newTestServer(t)
+	id, err := srv.store().Add("overlap", "0 0 * * *", nil, 0, nil, srv.onFire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.store().SetStatus(id, "running"); err != nil {
+		t.Fatal(err)
+	}
+	srv.onFire(id)
+	task, err := srv.store().Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != "running" {
+		t.Fatalf("status=%q want running", task.Status)
+	}
+}
+
+func TestPostWebhook_BlocksPrivateIP(t *testing.T) {
+	store, err := cronstore.New("UTC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Stop()
+	srv := New(store)
+	t.Setenv("SCHEDULER_WEBHOOK_ALLOW_PRIVATE", "")
+	err = srv.postWebhook("http://127.0.0.1/hook", &cronstore.Task{ID: "x"})
+	if err == nil {
+		t.Fatal("expected SSRF block for loopback")
+	}
+}
+
+func TestPostWebhook_AllowsPrivateWhenEnvSet(t *testing.T) {
+	srv := newTestServer(t)
+	t.Setenv("SCHEDULER_WEBHOOK_ALLOW_PRIVATE", "1")
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer hook.Close()
+	if err := srv.postWebhook(hook.URL, &cronstore.Task{ID: "x"}); err != nil {
+		t.Fatalf("private allowed: %v", err)
+	}
+}
+
+func TestSchedule_RequiresTokenOnNonLoopback(t *testing.T) {
+	store, err := cronstore.New("UTC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Stop()
+	srv := NewWithConfig(Config{Store: store, APIToken: "secret"})
+	body := `{"name":"t","cron_expr":"0 0 * * *"}`
+	req := httptest.NewRequest(http.MethodPost, "/schedule", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want 401", rec.Code)
+	}
+	req.Header.Set("X-Scheduler-Token", "secret")
+	rec2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec2, req)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec2.Code, rec2.Body.String())
+	}
+}
+
+func TestList_StatusFilterAndPayloadObject(t *testing.T) {
+	srv := newTestServer(t)
+	body := `{"name":"obj","cron_expr":"0 0 * * *","payload":{"webhook_url":"http://example.com"},"timeout":"5s","once":true}`
+	req := httptest.NewRequest(http.MethodPost, "/schedule", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("schedule: %d %s", rec.Code, rec.Body.String())
+	}
+	listReq := httptest.NewRequest(http.MethodGet, "/list?status=scheduled", nil)
+	listRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(listRec, listReq)
+	var tasks []map[string]any
+	if err := json.NewDecoder(listRec.Body).Decode(&tasks); err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("tasks=%d", len(tasks))
+	}
+	if tasks[0]["timeout"] != "5s" {
+		t.Fatalf("timeout=%v", tasks[0]["timeout"])
+	}
+	if tasks[0]["once"] != true {
+		t.Fatalf("once=%v", tasks[0]["once"])
+	}
+}
+
+func TestMetricsCounters(t *testing.T) {
+	srv := newTestServer(t)
+	id, err := srv.store().Add("m", "0 0 * * *", nil, 0, nil, srv.onFire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.onFire(id)
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, "scheduler_tasks_fired_total 1") {
+		t.Fatalf("metrics=%q", body)
+	}
+	if !strings.Contains(body, "scheduler_tasks_completed_total 1") {
+		t.Fatalf("metrics=%q", body)
 	}
 }

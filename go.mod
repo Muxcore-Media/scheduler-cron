@@ -3,6 +3,7 @@ module github.com/Muxcore-Media/scheduler-cron
 go 1.26.4
 
 require (
+	github.com/Muxcore-Media/contracts-media v0.1.0
 	github.com/Muxcore-Media/core v0.5.8
 	github.com/Muxcore-Media/core/pkg/contracts v0.5.8
 	github.com/Muxcore-Media/core/sdk/go/client v0.5.8
@@ -13,7 +14,6 @@ require (
 )
 
 require (
-	github.com/Muxcore-Media/contracts-media v0.1.0 // indirect
 	github.com/Muxcore-Media/core/pkg/tenant v0.5.8 // indirect
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect

@@ -2,6 +2,7 @@ package cronstore
 
 import (
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -154,14 +155,14 @@ func TestList(t *testing.T) {
 		t.Fatalf("Add beta-two: %v", err)
 	}
 
-	if len(s.List("")) != 3 {
-		t.Errorf("List() = %d, want 3", len(s.List("")))
+	if len(s.List(ListFilter{})) != 3 {
+		t.Errorf("List() = %d, want 3", len(s.List(ListFilter{})))
 	}
-	if len(s.List("beta")) != 2 {
-		t.Errorf("List(beta) = %d, want 2", len(s.List("beta")))
+	if len(s.List(ListFilter{Name: "beta"})) != 2 {
+		t.Errorf("List(beta) = %d, want 2", len(s.List(ListFilter{Name: "beta"})))
 	}
-	if len(s.List("nonexistent")) != 0 {
-		t.Errorf("List(nonexistent) = %d, want 0", len(s.List("nonexistent")))
+	if len(s.List(ListFilter{Name: "nonexistent"})) != 0 {
+		t.Errorf("List(nonexistent) = %d, want 0", len(s.List(ListFilter{Name: "nonexistent"})))
 	}
 }
 
@@ -246,6 +247,55 @@ func TestAddOnce(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("one-shot not removed, len=%d", s.Len())
+}
+
+func TestAddOnceWithCronExpr(t *testing.T) {
+	s, err := New("UTC")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Stop()
+
+	var fired atomic.Int32
+	id, err := s.AddWithOptions("once-later", "@every 1s", nil, 0, nil, func(string) {
+		fired.Add(1)
+	}, AddOptions{Once: true})
+	if err != nil {
+		t.Fatalf("AddWithOptions: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if fired.Load() != 0 {
+		t.Fatalf("once+cron fired early: %d", fired.Load())
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if fired.Load() >= 1 && s.Len() == 0 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("fired=%d len=%d id=%s", fired.Load(), s.Len(), id)
+}
+
+func TestListStatusFilter(t *testing.T) {
+	s, err := New("UTC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop()
+	id, err := s.Add("st", "0 0 * * *", nil, 0, nil, func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetStatus(id, "running"); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.List(ListFilter{Status: "running"})) != 1 {
+		t.Fatal("expected status filter match")
+	}
+	if len(s.List(ListFilter{Status: "scheduled"})) != 0 {
+		t.Fatal("expected no scheduled tasks")
+	}
 }
 
 func TestPersistAndRestore(t *testing.T) {

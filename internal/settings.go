@@ -106,6 +106,10 @@ func (m *Module) applySchedulerConfig(tz, storePath string, catchUp bool) error 
 	}
 
 	if tzChanged {
+		var snapshot []cronstore.Task
+		if m.store != nil {
+			snapshot = m.store.ExportAll()
+		}
 		store, err := cronstore.New(tz)
 		if err != nil {
 			return fmt.Errorf("init cron store: %w", err)
@@ -113,9 +117,11 @@ func (m *Module) applySchedulerConfig(tz, storePath string, catchUp bool) error 
 		store.SetCatchUp(catchUp)
 		if storePath != "" {
 			store.EnablePersist(storePath)
-			if err := store.Restore(m.srv.OnFire); err != nil {
+		}
+		for _, t := range snapshot {
+			if err := store.ImportTask(t, m.srv.OnFire); err != nil {
 				store.Stop()
-				return fmt.Errorf("restore store %q: %w", storePath, err)
+				return fmt.Errorf("migrate task %q: %w", t.ID, err)
 			}
 		}
 		old := m.srv.ReplaceStore(store)

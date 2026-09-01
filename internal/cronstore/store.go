@@ -23,20 +23,28 @@ type Task struct {
 	Timeout   time.Duration  `json:"timeout"`
 	Meta      map[string]any `json:"meta,omitempty"`
 	Status    string         `json:"status"`
+	Once      bool           `json:"once,omitempty"`
 	CreatedAt time.Time      `json:"created_at"`
-	LastFired time.Time      `json:"last_fired,omitempty"`
+	LastFired time.Time      `json:"last_fired_at,omitempty"`
+}
+
+// ListFilter narrows List queries.
+type ListFilter struct {
+	Name   string
+	Status string
 }
 
 // Store manages cron schedules. Thread-safe.
 type Store struct {
-	mu       sync.RWMutex
-	tasks    map[string]*Task
-	cron     *cron.Cron
-	eid      map[string]cron.EntryID
-	path     string
-	catchUp  bool
-	location *time.Location
-	handler  func(taskID string)
+	mu        sync.RWMutex
+	tasks     map[string]*Task
+	cron      *cron.Cron
+	eid       map[string]cron.EntryID
+	onceTimer map[string]*time.Timer
+	path      string
+	catchUp   bool
+	location  *time.Location
+	handler   func(taskID string)
 }
 
 // New creates a cron store. location is an IANA timezone name; empty means UTC.
@@ -51,11 +59,12 @@ func New(location string) (*Store, error) {
 	c := cron.New(cron.WithLocation(loc))
 	c.Start()
 	return &Store{
-		tasks:    make(map[string]*Task),
-		cron:     c,
-		eid:      make(map[string]cron.EntryID),
-		location: loc,
-		catchUp:  true,
+		tasks:     make(map[string]*Task),
+		cron:      c,
+		eid:       make(map[string]cron.EntryID),
+		onceTimer: make(map[string]*time.Timer),
+		location:  loc,
+		catchUp:   true,
 	}, nil
 }
 
@@ -92,8 +101,10 @@ func (s *Store) AddWithOptions(name, cronExpr string, payload []byte, timeout ti
 		return "", fmt.Errorf("cron expression is required")
 	}
 
-	once := opts.Once || strings.EqualFold(cronExpr, "@once")
-	if once {
+	onceImmediate := strings.EqualFold(cronExpr, "@once")
+	onceAfterNext := opts.Once && !onceImmediate
+	once := onceImmediate || onceAfterNext
+	if onceImmediate {
 		cronExpr = "@once"
 	} else {
 		parser := cron.NewParser(
@@ -113,12 +124,13 @@ func (s *Store) AddWithOptions(name, cronExpr string, payload []byte, timeout ti
 		Timeout:   timeout,
 		Meta:      meta,
 		Status:    "scheduled",
+		Once:      once,
 		CreatedAt: time.Now(),
 	}
 
 	s.mu.Lock()
 	s.handler = handler
-	if err := s.scheduleLocked(task, handler, once); err != nil {
+	if err := s.scheduleLocked(task, handler, onceImmediate, onceAfterNext); err != nil {
 		s.mu.Unlock()
 		return "", err
 	}
@@ -130,8 +142,9 @@ func (s *Store) AddWithOptions(name, cronExpr string, payload []byte, timeout ti
 	return id, nil
 }
 
-func (s *Store) scheduleLocked(task *Task, handler func(taskID string), once bool) error {
+func (s *Store) scheduleLocked(task *Task, handler func(taskID string), onceImmediate, onceAfterNext bool) error {
 	id := task.ID
+	once := onceImmediate || onceAfterNext
 	fire := func() {
 		slog.Info("cron task fired", "task_id", id, "name", task.Name, "expr", task.CronExpr)
 		handler(id)
@@ -148,8 +161,26 @@ func (s *Store) scheduleLocked(task *Task, handler func(taskID string), once boo
 		}
 	}
 
-	if once {
-		time.AfterFunc(10*time.Millisecond, fire)
+	if onceImmediate {
+		timer := time.AfterFunc(10*time.Millisecond, fire)
+		s.onceTimer[id] = timer
+		return nil
+	}
+	if onceAfterNext {
+		parser := cron.NewParser(
+			cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor,
+		)
+		sched, err := parser.Parse(task.CronExpr)
+		if err != nil {
+			return fmt.Errorf("parse one-shot cron: %w", err)
+		}
+		next := sched.Next(time.Now().In(s.location))
+		delay := time.Until(next)
+		if delay < 0 {
+			delay = 0
+		}
+		timer := time.AfterFunc(delay, fire)
+		s.onceTimer[id] = timer
 		return nil
 	}
 	entryID, err := s.cron.AddFunc(task.CronExpr, fire)
@@ -161,8 +192,6 @@ func (s *Store) scheduleLocked(task *Task, handler func(taskID string), once boo
 }
 
 // Restore reloads tasks from the persist file and re-schedules them.
-// Missed catch-up: if a recurring task's next fire after LastFired (or CreatedAt)
-// is in the past, handler is invoked once before re-arming.
 func (s *Store) Restore(handler func(taskID string)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -190,7 +219,7 @@ func (s *Store) Restore(handler func(taskID string)) error {
 	for i := range tasks {
 		t := tasks[i]
 		if t.CronExpr == "@once" {
-			continue // one-shots are not restored
+			continue
 		}
 		cp := t
 		if t.Payload != nil {
@@ -215,7 +244,6 @@ func (s *Store) Restore(handler func(taskID string)) error {
 				next := sched.Next(from.In(s.location))
 				if next.Before(now) {
 					slog.Info("cron catch-up fire", "task_id", task.ID, "missed", next)
-					// Release lock for handler (may call SetStatus/Get).
 					s.mu.Unlock()
 					handler(task.ID)
 					s.mu.Lock()
@@ -226,7 +254,8 @@ func (s *Store) Restore(handler func(taskID string)) error {
 			}
 		}
 
-		if err := s.scheduleLocked(task, handler, false); err != nil {
+		onceAfterNext := task.Once && task.CronExpr != "@once"
+		if err := s.scheduleLocked(task, handler, false, onceAfterNext); err != nil {
 			slog.Warn("cron restore schedule", "task_id", task.ID, "error", err)
 			delete(s.tasks, task.ID)
 			continue
@@ -235,13 +264,51 @@ func (s *Store) Restore(handler func(taskID string)) error {
 	return s.saveLocked()
 }
 
+// ImportTask re-schedules an exported task, preserving its ID and metadata.
+func (s *Store) ImportTask(task Task, handler func(taskID string)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if task.CronExpr == "@once" {
+		return nil
+	}
+	if _, ok := s.tasks[task.ID]; ok {
+		return fmt.Errorf("task %q already exists", task.ID)
+	}
+	cp := s.copyTask(task)
+	s.handler = handler
+	onceAfterNext := cp.Once && cp.CronExpr != "@once"
+	if err := s.scheduleLocked(&cp, handler, false, onceAfterNext); err != nil {
+		return err
+	}
+	s.tasks[cp.ID] = &cp
+	return s.saveLocked()
+}
+
+// ExportAll returns a snapshot of all tasks (copies).
+func (s *Store) ExportAll() []Task {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Task, 0, len(s.tasks))
+	for _, t := range s.tasks {
+		out = append(out, s.copyTask(*t))
+	}
+	return out
+}
+
 // Remove cancels and deletes a scheduled task.
 func (s *Store) Remove(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.removeLocked(id)
+}
 
+func (s *Store) removeLocked(id string) error {
 	if _, ok := s.tasks[id]; !ok {
 		return fmt.Errorf("task %q not found", id)
+	}
+	if timer, ok := s.onceTimer[id]; ok {
+		timer.Stop()
+		delete(s.onceTimer, id)
 	}
 	if eid, ok := s.eid[id]; ok {
 		s.cron.Remove(eid)
@@ -263,16 +330,7 @@ func (s *Store) Get(id string) (*Task, error) {
 	if !ok {
 		return nil, fmt.Errorf("task %q not found", id)
 	}
-	cp := *t
-	if t.Payload != nil {
-		cp.Payload = append([]byte(nil), t.Payload...)
-	}
-	if t.Meta != nil {
-		cp.Meta = make(map[string]any, len(t.Meta))
-		for k, v := range t.Meta {
-			cp.Meta[k] = v
-		}
-	}
+	cp := s.copyTask(*t)
 	return &cp, nil
 }
 
@@ -295,24 +353,52 @@ func (s *Store) SetStatus(id, status string) error {
 	return nil
 }
 
-// List returns all scheduled tasks, optionally filtered by name substring.
-func (s *Store) List(nameFilter string) []*Task {
+// List returns task copies matching the filter.
+func (s *Store) List(filter ListFilter) []Task {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	result := make([]*Task, 0, len(s.tasks))
+	result := make([]Task, 0, len(s.tasks))
 	for _, t := range s.tasks {
-		if nameFilter != "" && !strings.Contains(t.Name, nameFilter) {
+		if filter.Name != "" && !strings.Contains(t.Name, filter.Name) {
 			continue
 		}
-		result = append(result, t)
+		if filter.Status != "" && t.Status != filter.Status {
+			continue
+		}
+		result = append(result, s.copyTask(*t))
 	}
 	return result
+}
+
+// NextRun returns the next scheduled fire time for a task, if computable.
+func (s *Store) NextRun(id string) (time.Time, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, ok := s.tasks[id]
+	if !ok || strings.EqualFold(t.CronExpr, "@once") {
+		return time.Time{}, false
+	}
+	parser := cron.NewParser(
+		cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor,
+	)
+	sched, err := parser.Parse(t.CronExpr)
+	if err != nil {
+		return time.Time{}, false
+	}
+	from := time.Now()
+	if !t.LastFired.IsZero() {
+		from = t.LastFired
+	}
+	return sched.Next(from.In(s.location)), true
 }
 
 // Stop stops the cron scheduler. Call during shutdown.
 func (s *Store) Stop() {
 	s.mu.Lock()
+	for _, timer := range s.onceTimer {
+		timer.Stop()
+	}
 	_ = s.saveLocked()
 	s.mu.Unlock()
 	ctx := s.cron.Stop()
@@ -326,6 +412,20 @@ func (s *Store) Len() int {
 	return len(s.tasks)
 }
 
+func (s *Store) copyTask(t Task) Task {
+	cp := t
+	if t.Payload != nil {
+		cp.Payload = append([]byte(nil), t.Payload...)
+	}
+	if t.Meta != nil {
+		cp.Meta = make(map[string]any, len(t.Meta))
+		for k, v := range t.Meta {
+			cp.Meta[k] = v
+		}
+	}
+	return cp
+}
+
 func (s *Store) saveLocked() error {
 	if s.path == "" {
 		return nil
@@ -335,11 +435,7 @@ func (s *Store) saveLocked() error {
 		if t.CronExpr == "@once" {
 			continue
 		}
-		cp := *t
-		if t.Payload != nil {
-			cp.Payload = append([]byte(nil), t.Payload...)
-		}
-		tasks = append(tasks, cp)
+		tasks = append(tasks, s.copyTask(*t))
 	}
 	data, err := json.MarshalIndent(tasks, "", "  ")
 	if err != nil {

@@ -7,6 +7,8 @@ Wants=network-online.target
 Type=simple
 User=muxcore
 Group=muxcore
+Environment=SCHEDULER_STORE_PATH=/var/lib/scheduler-cron/tasks.json
+Environment=SCHEDULER_HTTP_ADDR=:9200
 ExecStart=/usr/local/bin/scheduler-cron \
   --muxcore-mesh-addr localhost:9090 \
   --muxcore-module-id scheduler-cron
@@ -21,6 +23,7 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/scheduler-cron
+StateDirectory=scheduler-cron
 
 [Install]
 WantedBy=multi-user.target

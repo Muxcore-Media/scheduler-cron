@@ -10,13 +10,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/soheilhy/cmux"
 	"google.golang.org/grpc"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"github.com/Muxcore-Media/core/sdk/go/client"
-	modulesdk "github.com/Muxcore-Media/core/sdk/go/module"
 	"github.com/Muxcore-Media/scheduler-cron/internal/cronstore"
 	"github.com/Muxcore-Media/scheduler-cron/internal/server"
 )
@@ -31,15 +31,19 @@ type Module struct {
 	mc        *client.Client
 	id        string
 	httpAddr  string
+	apiToken  string
 	cfgMu     sync.RWMutex
 	tz        string
 	storePath string
 	catchUp   bool
+	stopCh    chan struct{}
+	stopOnce  sync.Once
 }
 
 type Config struct {
 	ID        string
 	HTTPAddr  string
+	APIToken  string
 	TZ        string
 	StorePath string
 	CatchUp   *bool
@@ -50,7 +54,7 @@ func NewModule(cfg Config) *Module {
 		cfg.ID = "scheduler-cron"
 	}
 	if cfg.HTTPAddr == "" {
-		cfg.HTTPAddr = ":9200"
+		cfg.HTTPAddr = "127.0.0.1:9200"
 	}
 	if v := os.Getenv("SCHEDULER_HTTP_ADDR"); v != "" {
 		cfg.HTTPAddr = v
@@ -66,6 +70,10 @@ func NewModule(cfg Config) *Module {
 	if storePath == "" {
 		storePath = strings.TrimSpace(os.Getenv("SCHEDULER_STORE_PATH"))
 	}
+	apiToken := cfg.APIToken
+	if apiToken == "" {
+		apiToken = strings.TrimSpace(os.Getenv("SCHEDULER_API_TOKEN"))
+	}
 	catchUp := true
 	if cfg.CatchUp != nil {
 		catchUp = *cfg.CatchUp
@@ -77,6 +85,7 @@ func NewModule(cfg Config) *Module {
 	return &Module{
 		id:        cfg.ID,
 		httpAddr:  cfg.HTTPAddr,
+		apiToken:  apiToken,
 		tz:        tz,
 		storePath: storePath,
 		catchUp:   catchUp,
@@ -101,7 +110,13 @@ func (m *Module) Init(ctx context.Context) error {
 	tz := m.tz
 	storePath := m.storePath
 	catchUp := m.catchUp
+	apiToken := m.apiToken
+	httpAddr := m.httpAddr
 	m.cfgMu.RUnlock()
+
+	if !server.IsLoopbackBind(httpAddr) && apiToken == "" {
+		return fmt.Errorf("SCHEDULER_API_TOKEN is required when SCHEDULER_HTTP_ADDR=%q is not loopback-only", httpAddr)
+	}
 
 	store, err := cronstore.New(tz)
 	if err != nil {
@@ -112,7 +127,7 @@ func (m *Module) Init(ctx context.Context) error {
 		store.EnablePersist(storePath)
 	}
 	m.store = store
-	m.srv = server.New(store)
+	m.srv = server.NewWithConfig(server.Config{Store: store, APIToken: apiToken})
 	if storePath != "" {
 		if err := store.Restore(m.srv.OnFire); err != nil {
 			store.Stop()
@@ -120,12 +135,13 @@ func (m *Module) Init(ctx context.Context) error {
 		}
 		slog.Info("scheduler-cron restored tasks", "path", storePath, "count", store.Len())
 	}
-	m.lis, err = net.Listen("tcp", m.httpAddr)
+	m.lis, err = net.Listen("tcp", httpAddr)
 	if err != nil {
 		store.Stop()
-		return fmt.Errorf("listen %s: %w", m.httpAddr, err)
+		return fmt.Errorf("listen %s: %w", httpAddr, err)
 	}
-	slog.Info("scheduler-cron initialized", "addr", m.httpAddr, "tz", tz, "persist", storePath, "catch_up", catchUp)
+	m.stopCh = make(chan struct{})
+	slog.Info("scheduler-cron initialized", "addr", httpAddr, "tz", tz, "persist", storePath, "catch_up", catchUp)
 	return nil
 }
 
@@ -135,10 +151,10 @@ func (m *Module) Start(ctx context.Context) error {
 	httpL := m.cm.Match(cmux.Any())
 
 	m.grpcSrv = grpc.NewServer()
-	modulesdk.RegisterSettings(m.grpcSrv, m.id, m)
+	RegisterSchedulerMesh(m.grpcSrv, m.id, m)
 	m.httpSrv = &http.Server{Handler: m.srv.Handler()}
 
-	go m.dialCore(ctx)
+	go m.dialCore()
 	go func() {
 		slog.Info("scheduler-cron gRPC settings started", "addr", m.httpAddr)
 		if err := m.grpcSrv.Serve(grpcL); err != nil {
@@ -159,27 +175,46 @@ func (m *Module) Start(ctx context.Context) error {
 	return nil
 }
 
-func (m *Module) dialCore(ctx context.Context) {
+func (m *Module) dialCore() {
 	meshAddr := os.Getenv("MUXCORE_GRPC_ADDR")
 	if meshAddr == "" {
 		meshAddr = "localhost:9090"
 	}
 	insecureMode := os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") == "true" || os.Getenv("MUXCORE_GRPC_INSECURE") == "true"
-	var opts []client.Option
-	if insecureMode {
-		opts = append(opts, client.WithInsecure())
+	backoff := time.Second
+	for {
+		select {
+		case <-m.stopCh:
+			return
+		default:
+		}
+		var opts []client.Option
+		if insecureMode {
+			opts = append(opts, client.WithInsecure())
+		}
+		c, err := client.Dial(meshAddr, opts...)
+		if err == nil {
+			m.mc = c
+			m.srv.SetEventPublisher(c.Events, m.id)
+			slog.Info("scheduler-cron: connected to core mesh", "addr", meshAddr)
+			return
+		}
+		slog.Warn("scheduler-cron: dial core (retrying)", "addr", meshAddr, "error", err)
+		select {
+		case <-m.stopCh:
+			return
+		case <-time.After(backoff):
+		}
+		if backoff < 30*time.Second {
+			backoff *= 2
+		}
 	}
-	c, err := client.Dial(meshAddr, opts...)
-	if err != nil {
-		slog.Warn("scheduler-cron: dial core (events unavailable)", "error", err)
-		return
-	}
-	m.mc = c
-	m.srv.SetEventPublisher(c.Events, m.id)
-	slog.Info("scheduler-cron: connected to core mesh", "addr", meshAddr)
 }
 
 func (m *Module) Stop(ctx context.Context) error {
+	m.stopOnce.Do(func() {
+		close(m.stopCh)
+	})
 	if m.httpSrv != nil {
 		_ = m.httpSrv.Shutdown(ctx)
 	}
@@ -200,5 +235,14 @@ func (m *Module) Stop(ctx context.Context) error {
 }
 
 func (m *Module) Health(ctx context.Context) error {
+	if m.store == nil || m.lis == nil {
+		return fmt.Errorf("scheduler-cron not initialized")
+	}
+	d := net.Dialer{Timeout: 2 * time.Second}
+	conn, err := d.DialContext(ctx, "tcp", m.lis.Addr().String())
+	if err != nil {
+		return fmt.Errorf("listener unavailable: %w", err)
+	}
+	_ = conn.Close()
 	return nil
 }
