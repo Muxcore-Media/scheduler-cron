@@ -31,6 +31,7 @@ type Module struct {
 	mc        *client.Client
 	id        string
 	httpAddr  string
+	token     string
 	cfgMu     sync.RWMutex
 	tz        string
 	storePath string
@@ -38,8 +39,10 @@ type Module struct {
 }
 
 type Config struct {
-	ID        string
-	HTTPAddr  string
+	ID       string
+	HTTPAddr string
+	// HTTPToken is the bearer token (env SCHEDULER_HTTP_TOKEN). Required for non-loopback HTTPAddr.
+	HTTPToken string
 	TZ        string
 	StorePath string
 	CatchUp   *bool
@@ -50,10 +53,13 @@ func NewModule(cfg Config) *Module {
 		cfg.ID = "scheduler-cron"
 	}
 	if cfg.HTTPAddr == "" {
-		cfg.HTTPAddr = ":9200"
+		cfg.HTTPAddr = "127.0.0.1:9200"
 	}
 	if v := os.Getenv("SCHEDULER_HTTP_ADDR"); v != "" {
 		cfg.HTTPAddr = v
+	}
+	if cfg.HTTPToken == "" {
+		cfg.HTTPToken = strings.TrimSpace(os.Getenv("SCHEDULER_HTTP_TOKEN"))
 	}
 	tz := cfg.TZ
 	if tz == "" {
@@ -77,6 +83,7 @@ func NewModule(cfg Config) *Module {
 	return &Module{
 		id:        cfg.ID,
 		httpAddr:  cfg.HTTPAddr,
+		token:     cfg.HTTPToken,
 		tz:        tz,
 		storePath: storePath,
 		catchUp:   catchUp,
@@ -97,6 +104,9 @@ func (m *Module) Info() contracts.ModuleInfo {
 }
 
 func (m *Module) Init(ctx context.Context) error {
+	if err := server.ValidateListen(m.httpAddr, m.token); err != nil {
+		return err
+	}
 	m.cfgMu.RLock()
 	tz := m.tz
 	storePath := m.storePath
@@ -134,9 +144,9 @@ func (m *Module) Start(ctx context.Context) error {
 	grpcL := m.cm.MatchWithWriters(cmux.HTTP2MatchHeaderFieldSendSettings("content-type", "application/grpc"))
 	httpL := m.cm.Match(cmux.Any())
 
-	m.grpcSrv = grpc.NewServer()
+	m.grpcSrv = grpc.NewServer(server.GRPCAuth(m.token)...)
 	modulesdk.RegisterSettings(m.grpcSrv, m.id, m)
-	m.httpSrv = &http.Server{Handler: m.srv.Handler()}
+	m.httpSrv = &http.Server{Handler: server.RequireToken(m.token, m.srv.Handler())}
 
 	go m.dialCore(ctx)
 	go func() {

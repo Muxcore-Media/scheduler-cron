@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.7] - 2026-10-05
+
+
+### Security
+- NFR-SEC-011 / T-M3-07: default HTTP listen address is now `127.0.0.1:9200` (was `:9200`). A non-loopback `SCHEDULER_HTTP_ADDR` requires `SCHEDULER_HTTP_TOKEN` and the module refuses to start without it. With a token set, all endpoints except `GET /health` (and the multiplexed gRPC settings service) require `Authorization: Bearer <token>` (constant-time compare). No default token.
 
 ## [0.1.6] - 2026-10-05
 

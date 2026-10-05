@@ -44,7 +44,8 @@ Also supports:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SCHEDULER_HTTP_ADDR` | `:9200` | HTTP listen address for the schedule API |
+| `SCHEDULER_HTTP_ADDR` | `127.0.0.1:9200` | HTTP (and cmux-multiplexed gRPC settings) listen address. Non-loopback requires `SCHEDULER_HTTP_TOKEN`. |
+| `SCHEDULER_HTTP_TOKEN` | unset (no default) | Bearer token. Required when the listen address is not loopback; when set, every endpoint except `GET /health` needs `Authorization: Bearer <token>` (gRPC: `authorization` metadata). Startup fails closed if missing. |
 | `MUXCORE_GRPC_ADDR` | (SDK default) | Core gRPC address for sidecar registration |
 | `MUXCORE_MODULE_ID` | `scheduler-cron` | Module identity when registering with core |
 | `MUXCORE_INSECURE_DISABLE_TLS` | unset | Dev-only: disable TLS to core |
@@ -68,7 +69,7 @@ Timezone: set `SCHEDULER_TZ` (IANA name; default UTC). One-shot: `"once": true` 
 - HTTP API mirrors `contracts.Scheduler` operations (Schedule, Cancel, Status, List)
 - Uses `robfig/cron/v3` for cron expression parsing (including descriptors)
 - Tasks are stored in-memory
-- Default HTTP listen address: `:9200`
+- Default HTTP listen address: `127.0.0.1:9200` (loopback; NFR-SEC-011)
 
 
 Operator surface: [`muxcorectl-cli`](https://github.com/Muxcore-Media/muxcorectl-cli) `schedules list|status|add|cancel` (discovers this module’s `HttpAddr`, or set `--scheduler-url` / `SCHEDULER_URL`).

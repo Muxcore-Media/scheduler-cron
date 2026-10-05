@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -64,4 +65,31 @@ func TestModuleLifecycle_Cmux(t *testing.T) {
 	if err := m.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestNewModule_DefaultsLoopback(t *testing.T) {
+	t.Setenv("SCHEDULER_HTTP_ADDR", "")
+	m := NewModule(Config{})
+	if m.httpAddr != "127.0.0.1:9200" {
+		t.Fatalf("default addr=%q", m.httpAddr)
+	}
+}
+
+func TestInit_NonLoopbackRequiresToken(t *testing.T) {
+	t.Setenv("SCHEDULER_HTTP_TOKEN", "")
+	m := NewModule(Config{HTTPAddr: "0.0.0.0:0"})
+	err := m.Init(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "SCHEDULER_HTTP_TOKEN") {
+		t.Fatalf("expected token error, got %v", err)
+	}
+}
+
+func TestInit_NonLoopbackWithTokenFromEnv(t *testing.T) {
+	t.Setenv("SCHEDULER_HTTP_TOKEN", "s3cret")
+	m := NewModule(Config{HTTPAddr: "0.0.0.0:0"})
+	ctx := context.Background()
+	if err := m.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_ = m.Stop(ctx)
 }

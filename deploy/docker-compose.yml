@@ -18,13 +18,14 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "9200:9200"
+      - "127.0.0.1:9200:9200"
     environment:
       MUXCORE_GRPC_ADDR: core:9090
       MUXCORE_INSECURE_DISABLE_TLS: "true"
       MUXCORE_LOG_LEVEL: debug
       MUXCORE_MODULE_ID: scheduler-cron
-      SCHEDULER_HTTP_ADDR: ":9200"
+      SCHEDULER_HTTP_ADDR: "0.0.0.0:9200"
+      SCHEDULER_HTTP_TOKEN: "${SCHEDULER_HTTP_TOKEN:?set SCHEDULER_HTTP_TOKEN}"
     depends_on:
       core:
         condition: service_healthy
