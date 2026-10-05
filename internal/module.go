@@ -17,6 +17,7 @@ import (
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"github.com/Muxcore-Media/core/sdk/go/client"
 	modulesdk "github.com/Muxcore-Media/core/sdk/go/module"
+	manifest "github.com/Muxcore-Media/scheduler-cron"
 	"github.com/Muxcore-Media/scheduler-cron/internal/cronstore"
 	"github.com/Muxcore-Media/scheduler-cron/internal/server"
 )
@@ -94,7 +95,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Scheduler Cron",
-		Version:      "0.1.5",
+		Version:      modulesdk.ManifestVersion(manifest.ManifestJSON),
 		Roles:        []string{"infrastructure"},
 		Description:  "Cron scheduler with persistent store and missed-fire catch-up",
 		Author:       "MuxCore",

@@ -4,6 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	modulesdk "github.com/Muxcore-Media/core/sdk/go/module"
+	manifest "github.com/Muxcore-Media/scheduler-cron"
 )
 
 func TestModuleInfo(t *testing.T) {
@@ -12,7 +15,7 @@ func TestModuleInfo(t *testing.T) {
 	if info.ID != "scheduler-cron" {
 		t.Fatalf("id=%q", info.ID)
 	}
-	if info.Version != "0.1.5" {
+	if info.Version != modulesdk.ManifestVersion(manifest.ManifestJSON) {
 		t.Fatalf("version=%q", info.Version)
 	}
 	foundSettings := false
