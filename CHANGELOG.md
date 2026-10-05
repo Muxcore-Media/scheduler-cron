@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.10] - 2026-10-05
+
+
+### Security
+- NFR-SEC-009 / RULE-VAL-2: task `webhook_url` (from `meta` or `payload`) is validated at `/schedule` (http/https only; private, loopback, link-local, metadata targets and userinfo rejected) and fired through a netguard `UserURL` client (dial-time IP checks, redirect re-validation, DNS-rebinding safe), so restored tasks are guarded too. The webhook client no longer has an unbounded (zero) timeout. Built on sdk/go/module v0.6.6.
+
 ## [0.1.9] - 2026-10-05
 
 ### Changed

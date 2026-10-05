@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Muxcore-Media/core/sdk/go/module/netguard"
 	"github.com/Muxcore-Media/scheduler-cron/internal/cronstore"
 )
 
@@ -33,17 +34,27 @@ type Server struct {
 	events     EventPublisher
 	moduleID   string
 	httpClient *http.Client
+	// validateWebhook checks a task webhook URL (SSRF guard, RULE-VAL-2).
+	validateWebhook func(string) error
+}
+
+// webhookOpts guards task webhook targets, which are user-supplied: no
+// private, loopback, link-local or metadata destinations. Per-request
+// deadlines come from the task Timeout via context; Timeout here is the
+// upper bound for any single webhook call.
+var webhookOpts = netguard.Options{Timeout: 5 * time.Minute}
+
+func validateWebhookURL(raw string) error {
+	return netguard.ValidateURL(raw, netguard.UserURL, webhookOpts)
 }
 
 // New creates an HTTP server backed by the given cron store.
 func New(store *cronstore.Store) *Server {
 	s := &Server{
-		mux:      http.NewServeMux(),
-		moduleID: "scheduler-cron",
-		httpClient: &http.Client{
-			// Per-request timeouts come from task Timeout via context.
-			Timeout: 0,
-		},
+		mux:             http.NewServeMux(),
+		moduleID:        "scheduler-cron",
+		httpClient:      netguard.NewClient(netguard.UserURL, webhookOpts),
+		validateWebhook: validateWebhookURL,
 	}
 	s.storePtr.Store(store)
 	s.mux.HandleFunc("/schedule", s.handleSchedule)
@@ -122,6 +133,14 @@ func (s *Server) handleSchedule(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		timeout = d
+	}
+
+	probe := &cronstore.Task{Payload: req.Payload, Meta: req.Meta}
+	if u := webhookURLFrom(probe); u != "" {
+		if err := s.validateWebhook(u); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid webhook_url: "+err.Error())
+			return
+		}
 	}
 
 	id, err := s.store().AddWithOptions(req.Name, req.CronExpr, req.Payload, timeout, req.Meta, s.onFire, cronstore.AddOptions{Once: req.Once})
@@ -234,6 +253,9 @@ func webhookURLFrom(task *cronstore.Task) string {
 func (s *Server) postWebhook(url string, task *cronstore.Task) error {
 	if url == "" {
 		return nil
+	}
+	if err := s.validateWebhook(url); err != nil {
+		return fmt.Errorf("webhook rejected: %w", err)
 	}
 	body, err := json.Marshal(map[string]any{
 		"task_id":   task.ID,

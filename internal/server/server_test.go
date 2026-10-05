@@ -14,7 +14,7 @@ import (
 	"github.com/Muxcore-Media/scheduler-cron/internal/cronstore"
 )
 
-func newTestServer(t *testing.T) *Server {
+func newGuardedTestServer(t *testing.T) *Server {
 	t.Helper()
 	store, err := cronstore.New("UTC")
 	if err != nil {
@@ -22,6 +22,16 @@ func newTestServer(t *testing.T) *Server {
 	}
 	t.Cleanup(store.Stop)
 	return New(store)
+}
+
+// newTestServer disables the SSRF guard so webhooks can target loopback
+// httptest servers; guard behaviour is covered in ssrf_test.go.
+func newTestServer(t *testing.T) *Server {
+	t.Helper()
+	srv := newGuardedTestServer(t)
+	srv.validateWebhook = func(string) error { return nil }
+	srv.httpClient = &http.Client{Timeout: 5 * time.Second}
+	return srv
 }
 
 func TestSchedule(t *testing.T) {
